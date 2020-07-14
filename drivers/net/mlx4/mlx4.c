@@ -8,8 +8,6 @@
  * mlx4 driver initialization.
  */
 
-#include <assert.h>
-#include <dlfcn.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <stddef.h>
@@ -19,6 +17,9 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#ifdef RTE_IBVERBS_LINK_DLOPEN
+#include <dlfcn.h>
+#endif
 
 /* Verbs headers do not support -pedantic. */
 #ifdef PEDANTIC
@@ -30,7 +31,6 @@
 #endif
 
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_dev.h>
 #include <rte_errno.h>
 #include <rte_ethdev_driver.h>
@@ -48,6 +48,10 @@
 #include "mlx4_mr.h"
 #include "mlx4_rxtx.h"
 #include "mlx4_utils.h"
+
+#ifdef MLX4_GLUE
+const struct mlx4_glue *mlx4_glue;
+#endif
 
 static const char *MZ_MLX4_PMD_SHARED_DATA = "mlx4_pmd_shared_data";
 
@@ -159,7 +163,7 @@ mlx4_alloc_verbs_buf(size_t size, void *data)
 
 		socket = rxq->socket;
 	}
-	assert(data != NULL);
+	MLX4_ASSERT(data != NULL);
 	ret = rte_malloc_socket(__func__, size, alignment, socket);
 	if (!ret && size)
 		rte_errno = ENOMEM;
@@ -177,7 +181,7 @@ mlx4_alloc_verbs_buf(size_t size, void *data)
 static void
 mlx4_free_verbs_buf(void *ptr, void *data __rte_unused)
 {
-	assert(data != NULL);
+	MLX4_ASSERT(data != NULL);
 	rte_free(ptr);
 }
 #endif
@@ -245,6 +249,9 @@ mlx4_dev_configure(struct rte_eth_dev *dev)
 	struct rte_flow_error error;
 	int ret;
 
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+
 	/* Prepare internal flow rules. */
 	ret = mlx4_flow_sync(priv, &error);
 	if (ret) {
@@ -299,7 +306,7 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		      (void *)dev, strerror(-ret));
 		goto err;
 	}
-#ifndef NDEBUG
+#ifdef RTE_LIBRTE_MLX4_DEBUG
 	mlx4_mr_dump_dev(dev);
 #endif
 	ret = mlx4_rxq_intr_enable(priv);
@@ -386,11 +393,11 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	mlx4_proc_priv_uninit(dev);
 	mlx4_mr_release(dev);
 	if (priv->pd != NULL) {
-		assert(priv->ctx != NULL);
+		MLX4_ASSERT(priv->ctx != NULL);
 		claim_zero(mlx4_glue->dealloc_pd(priv->pd));
 		claim_zero(mlx4_glue->close_device(priv->ctx));
 	} else
-		assert(priv->ctx == NULL);
+		MLX4_ASSERT(priv->ctx == NULL);
 	mlx4_intr_uninstall(priv);
 	memset(priv, 0, sizeof(*priv));
 }
@@ -410,6 +417,7 @@ static const struct eth_dev_ops mlx4_dev_ops = {
 	.mac_addr_remove = mlx4_mac_addr_remove,
 	.mac_addr_add = mlx4_mac_addr_add,
 	.mac_addr_set = mlx4_mac_addr_set,
+	.set_mc_addr_list = mlx4_set_mc_addr_list,
 	.stats_get = mlx4_stats_get,
 	.stats_reset = mlx4_stats_reset,
 	.fw_version_get = mlx4_fw_version_get,
@@ -481,7 +489,6 @@ mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 			   &pci_addr->bus,
 			   &pci_addr->devid,
 			   &pci_addr->function) == 4) {
-			ret = 0;
 			break;
 		}
 	}
@@ -693,11 +700,12 @@ mlx4_init_once(void)
 {
 	struct mlx4_shared_data *sd;
 	struct mlx4_local_data *ld = &mlx4_local_data;
+	int ret = 0;
 
 	if (mlx4_init_shared_data())
 		return -rte_errno;
 	sd = mlx4_shared_data;
-	assert(sd);
+	MLX4_ASSERT(sd);
 	rte_spinlock_lock(&sd->lock);
 	switch (rte_eal_process_type()) {
 	case RTE_PROC_PRIMARY:
@@ -707,21 +715,26 @@ mlx4_init_once(void)
 		rte_rwlock_init(&sd->mem_event_rwlock);
 		rte_mem_event_callback_register("MLX4_MEM_EVENT_CB",
 						mlx4_mr_mem_event_cb, NULL);
-		mlx4_mp_init_primary();
-		sd->init_done = true;
+		ret = mlx4_mp_init_primary();
+		if (ret)
+			goto out;
+		sd->init_done = 1;
 		break;
 	case RTE_PROC_SECONDARY:
 		if (ld->init_done)
 			break;
-		mlx4_mp_init_secondary();
+		ret = mlx4_mp_init_secondary();
+		if (ret)
+			goto out;
 		++sd->secondary_cnt;
-		ld->init_done = true;
+		ld->init_done = 1;
 		break;
 	default:
 		break;
 	}
+out:
 	rte_spinlock_unlock(&sd->lock);
-	return 0;
+	return ret;
 }
 
 /**
@@ -753,6 +766,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	};
 	unsigned int vf;
 	int i;
+	char ifname[IF_NAMESIZE];
 
 	(void)pci_drv;
 	err = mlx4_init_once();
@@ -761,16 +775,16 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		      strerror(rte_errno));
 		return -rte_errno;
 	}
-	assert(pci_drv == &mlx4_driver);
+	MLX4_ASSERT(pci_drv == &mlx4_driver);
 	list = mlx4_glue->get_device_list(&i);
 	if (list == NULL) {
 		rte_errno = errno;
-		assert(rte_errno);
+		MLX4_ASSERT(rte_errno);
 		if (rte_errno == ENOSYS)
 			ERROR("cannot list devices, is ib_uverbs loaded?");
 		return -rte_errno;
 	}
-	assert(i >= 0);
+	MLX4_ASSERT(i >= 0);
 	/*
 	 * For each listed device, check related sysfs entry against
 	 * the provided PCI ID.
@@ -807,7 +821,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			ERROR("cannot use device, are drivers up to date?");
 			return -rte_errno;
 		}
-		assert(err > 0);
+		MLX4_ASSERT(err > 0);
 		rte_errno = err;
 		return -rte_errno;
 	}
@@ -832,7 +846,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		err = ENODEV;
 		goto error;
 	}
-	assert(device_attr.max_sge >= MLX4_MAX_SGE);
+	MLX4_ASSERT(device_attr.max_sge >= MLX4_MAX_SGE);
 	for (i = 0; i < device_attr.phys_port_cnt; i++) {
 		uint32_t port = i + 1; /* ports are indexed from one */
 		struct ibv_context *ctx = NULL;
@@ -840,7 +854,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct ibv_pd *pd = NULL;
 		struct mlx4_priv *priv = NULL;
 		struct rte_eth_dev *eth_dev = NULL;
-		struct ether_addr mac;
+		struct rte_ether_addr mac;
 		char name[RTE_ETH_NAME_MAX_LEN];
 
 		/* If port is not enabled, skip. */
@@ -944,7 +958,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		priv->device_attr = device_attr;
 		priv->port = port;
 		priv->pd = pd;
-		priv->mtu = ETHER_MTU;
+		priv->mtu = RTE_ETHER_MTU;
 		priv->vf = vf;
 		priv->hw_csum =	!!(device_attr.device_cap_flags &
 				   IBV_DEVICE_RAW_IP_CSUM);
@@ -992,17 +1006,15 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		     mac.addr_bytes[4], mac.addr_bytes[5]);
 		/* Register MAC address. */
 		priv->mac[0] = mac;
-#ifndef NDEBUG
-		{
-			char ifname[IF_NAMESIZE];
 
-			if (mlx4_get_ifname(priv, &ifname) == 0)
-				DEBUG("port %u ifname is \"%s\"",
-				      priv->port, ifname);
-			else
-				DEBUG("port %u ifname is unknown", priv->port);
+		if (mlx4_get_ifname(priv, &ifname) == 0) {
+			DEBUG("port %u ifname is \"%s\"",
+			      priv->port, ifname);
+			priv->if_index = if_nametoindex(ifname);
+		} else {
+			DEBUG("port %u ifname is unknown", priv->port);
 		}
-#endif
+
 		/* Get actual MTU if possible. */
 		mlx4_mtu_get(priv, &priv->mtu);
 		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
@@ -1038,14 +1050,13 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		eth_dev->dev_ops = &mlx4_dev_ops;
 #ifdef HAVE_IBV_MLX4_BUF_ALLOCATORS
 		/* Hint libmlx4 to use PMD allocator for data plane resources */
-		struct mlx4dv_ctx_allocators alctr = {
-			.alloc = &mlx4_alloc_verbs_buf,
-			.free = &mlx4_free_verbs_buf,
-			.data = priv,
-		};
 		err = mlx4_glue->dv_set_context_attr
 			(ctx, MLX4DV_SET_CTX_ATTR_BUF_ALLOCATORS,
-			 (void *)((uintptr_t)&alctr));
+			 (void *)((uintptr_t)&(struct mlx4dv_ctx_allocators){
+				 .alloc = &mlx4_alloc_verbs_buf,
+				 .free = &mlx4_free_verbs_buf,
+				 .data = priv,
+			}));
 		if (err)
 			WARN("Verbs external allocator is not supported");
 		else
@@ -1132,8 +1143,7 @@ static struct rte_pci_driver mlx4_driver = {
 	},
 	.id_table = mlx4_pci_id_map,
 	.probe = mlx4_pci_probe,
-	.drv_flags = RTE_PCI_DRV_INTR_LSC |
-		     RTE_PCI_DRV_INTR_RMV,
+	.drv_flags = RTE_PCI_DRV_INTR_LSC | RTE_PCI_DRV_INTR_RMV,
 };
 
 #ifdef RTE_IBVERBS_LINK_DLOPEN
@@ -1266,6 +1276,9 @@ glue_error:
 
 #endif
 
+/* Initialize driver log type. */
+RTE_LOG_REGISTER(mlx4_logtype, pmd.net.mlx4, NOTICE)
+
 /**
  * Driver initialization routine.
  */
@@ -1287,15 +1300,15 @@ RTE_INIT(rte_mlx4_pmd_init)
 #ifdef RTE_IBVERBS_LINK_DLOPEN
 	if (mlx4_glue_init())
 		return;
-	assert(mlx4_glue);
+	MLX4_ASSERT(mlx4_glue);
 #endif
-#ifndef NDEBUG
+#ifdef RTE_LIBRTE_MLX4_DEBUG
 	/* Glue structure must not contain any NULL pointers. */
 	{
 		unsigned int i;
 
 		for (i = 0; i != sizeof(*mlx4_glue) / sizeof(void *); ++i)
-			assert(((const void *const *)mlx4_glue)[i]);
+			MLX4_ASSERT(((const void *const *)mlx4_glue)[i]);
 	}
 #endif
 	if (strcmp(mlx4_glue->version, MLX4_GLUE_VERSION)) {

@@ -19,20 +19,34 @@ dpdk_static_libraries = []
 dpdk_driver_classes = []
 dpdk_drivers = []
 dpdk_extra_ldflags = []
-dpdk_app_link_libraries = []
+dpdk_libs_disabled = []
+dpdk_drvs_disabled = []
+abi_version_file = files('ABI_VERSION')
+
+if host_machine.cpu_family().startswith('x86')
+	arch_subdir = 'x86'
+elif host_machine.cpu_family().startswith('arm') or host_machine.cpu_family().startswith('aarch')
+	arch_subdir = 'arm'
+elif host_machine.cpu_family().startswith('ppc')
+	arch_subdir = 'ppc'
+endif
 
 # configure the build, and make sure configs here and in config folder are
 # able to be included in any file. We also store a global array of include dirs
 # for passing to pmdinfogen scripts
 global_inc = include_directories('.', 'config',
-	'lib/librte_eal/common/include',
-	'lib/librte_eal/@0@/eal/include'.format(host_machine.system()),
+	'lib/librte_eal/include',
+	'lib/librte_eal/@0@/include'.format(host_machine.system()),
+	'lib/librte_eal/@0@/include'.format(arch_subdir),
 )
+
+# do configuration and get tool paths
+subdir('buildtools')
 subdir('config')
 
 # build libs and drivers
+subdir('buildtools/pmdinfogen')
 subdir('lib')
-subdir('buildtools')
 subdir('drivers')
 
 # build binaries and installable tools
@@ -42,10 +56,9 @@ subdir('app')
 # build docs
 subdir('doc')
 
-# build any examples explicitly requested - useful for developers
-if get_option('examples') != ''
-	subdir('examples')
-endif
+# build any examples explicitly requested - useful for developers - and
+# install any example code into the appropriate install path
+subdir('examples')
 
 # build kernel modules if enabled
 if get_option('enable_kmods')
@@ -59,30 +72,8 @@ configure_file(output: build_cfg,
 		install_dir: join_paths(get_option('includedir'),
 				get_option('include_subdir_arch')))
 
-# for static builds, include the drivers as libs and we need to "whole-archive"
-# them.
-dpdk_drivers = ['-Wl,--whole-archive'] + dpdk_drivers + ['-Wl,--no-whole-archive']
-
-# driver .so files often depend upon the bus drivers for their connect bus,
-# e.g. ixgbe depends on librte_bus_pci. This means that the bus drivers need
-# to be in the library path, so symlink the drivers from the main lib directory.
-meson.add_install_script('buildtools/symlink-drivers-solibs.sh',
-		driver_install_path,
-		get_option('libdir'))
-
-pkg = import('pkgconfig')
-pkg.generate(name: meson.project_name(),
-	filebase: 'lib' + meson.project_name().to_lower(),
-	version: meson.project_version(),
-	libraries: dpdk_libraries,
-	libraries_private: dpdk_drivers + dpdk_static_libraries +
-			['-Wl,-Bdynamic'] + dpdk_extra_ldflags,
-	description: '''The Data Plane Development Kit (DPDK).
-Note that CFLAGS might contain an -march flag higher than typical baseline.
-This is required for a number of static inline functions in the public headers.''',
-	subdirs: [get_option('include_subdir_arch'), '.'],
-	extra_cflags: ['-include', 'rte_config.h'] + machine_args
-)
+# build pkg-config files for dpdk
+subdir('buildtools/pkg-config')
 
 # final output, list all the libs and drivers to be built
 # this does not affect any part of the build, for information only.
@@ -112,5 +103,18 @@ foreach class:dpdk_driver_classes
 			output_count = 0
 		endif
 	endforeach
+endforeach
+message(output_message + '\n')
+
+output_message = '\n=================\nContent Skipped\n=================\n'
+output_message += '\nlibs:\n\t'
+foreach lib:dpdk_libs_disabled
+	reason = get_variable(lib.underscorify() + '_disable_reason')
+	output_message += lib + ':\t' + reason + '\n\t'
+endforeach
+output_message += '\ndrivers:\n\t'
+foreach drv:dpdk_drvs_disabled
+	reason = get_variable(drv.underscorify() + '_disable_reason')
+	output_message += drv + ':\t' + reason + '\n\t'
 endforeach
 message(output_message + '\n')

@@ -19,7 +19,7 @@ struct aesctr_cnt_blk {
 	uint32_t nonce;
 	uint64_t iv;
 	uint32_t cnt;
-} __attribute__((packed));
+} __rte_packed;
 
  /*
   * AES-GCM devices have some specific requirements for IV and AAD formats.
@@ -30,7 +30,7 @@ struct aead_gcm_iv {
 	uint32_t salt;
 	uint64_t iv;
 	uint32_t cnt;
-} __attribute__((packed));
+} __rte_packed;
 
 struct aead_gcm_aad {
 	uint32_t spi;
@@ -44,12 +44,12 @@ struct aead_gcm_aad {
 		uint64_t u64;
 	} sqn;
 	uint32_t align0; /* align to 16B boundary */
-} __attribute__((packed));
+} __rte_packed;
 
 struct gcm_esph_iv {
-	struct esp_hdr esph;
+	struct rte_esp_hdr esph;
 	uint64_t iv;
-} __attribute__((packed));
+} __rte_packed;
 
 static inline void
 aes_ctr_cnt_blk_fill(struct aesctr_cnt_blk *ctr, uint64_t iv, uint32_t nonce)
@@ -95,7 +95,7 @@ gen_iv(uint64_t iv[IPSEC_MAX_IV_QWORD], rte_be64_t sqn)
 
 /*
  * Helper routine to copy IV
- * Righ now we support only algorithms with IV length equals 0/8/16 bytes.
+ * Right now we support only algorithms with IV length equals 0/8/16 bytes.
  */
 static inline void
 copy_iv(uint64_t dst[IPSEC_MAX_IV_QWORD],

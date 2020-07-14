@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
  *
  * Copyright 2010-2016 Freescale Semiconductor Inc.
- * Copyright 2017 NXP
+ * Copyright 2017-2019 NXP
  *
  */
 #include <inttypes.h>
-#include <of.h>
+#include <dpaa_of.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <error.h>
@@ -44,7 +44,8 @@ dump_netcfg(struct netcfg_info *cfg_ptr)
 
 		printf("\n+ Fman %d, MAC %d (%s);\n",
 		       __if->fman_idx, __if->mac_idx,
-		       (__if->mac_type == fman_mac_1g) ? "1G" : "10G");
+		       (__if->mac_type == fman_mac_1g) ? "1G" :
+		       (__if->mac_type == fman_mac_2_5g) ? "2.5G" : "10G");
 
 		printf("\tmac_addr: %02x:%02x:%02x:%02x:%02x:%02x\n",
 		       (&__if->mac_addr)->addr_bytes[0],

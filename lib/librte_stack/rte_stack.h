@@ -4,9 +4,12 @@
 
 /**
  * @file rte_stack.h
- * @b EXPERIMENTAL: this API may change without prior notice
  *
- * RTE Stack
+ * RTE Stack.
+ *
+ * @warning
+ * @b EXPERIMENTAL:
+ * All functions in this file may be changed or removed without prior notice.
  *
  * librte_stack provides an API for configuration and use of a bounded stack of
  * pointers. Push and pop operations are MT-safe, allowing concurrent access,
@@ -47,7 +50,7 @@ struct rte_stack_lf_list {
 	/** List head */
 	struct rte_stack_lf_head head __rte_aligned(16);
 	/** List len */
-	rte_atomic64_t len;
+	uint64_t len;
 };
 
 /* Structure containing two lock-free LIFO lists: the stack itself and a list
@@ -112,7 +115,8 @@ struct rte_stack {
  * @return
  *   Actual number of objects pushed (either 0 or *n*).
  */
-static __rte_always_inline unsigned int __rte_experimental
+__rte_experimental
+static __rte_always_inline unsigned int
 rte_stack_push(struct rte_stack *s, void * const *obj_table, unsigned int n)
 {
 	RTE_ASSERT(s != NULL);
@@ -139,7 +143,8 @@ rte_stack_push(struct rte_stack *s, void * const *obj_table, unsigned int n)
  * @return
  *   Actual number of objects popped (either 0 or *n*).
  */
-static __rte_always_inline unsigned int __rte_experimental
+__rte_experimental
+static __rte_always_inline unsigned int
 rte_stack_pop(struct rte_stack *s, void **obj_table, unsigned int n)
 {
 	RTE_ASSERT(s != NULL);
@@ -162,7 +167,8 @@ rte_stack_pop(struct rte_stack *s, void **obj_table, unsigned int n)
  * @return
  *   The number of used entries in the stack.
  */
-static __rte_always_inline unsigned int __rte_experimental
+__rte_experimental
+static __rte_always_inline unsigned int
 rte_stack_count(struct rte_stack *s)
 {
 	RTE_ASSERT(s != NULL);
@@ -184,7 +190,8 @@ rte_stack_count(struct rte_stack *s)
  * @return
  *   The number of free entries in the stack.
  */
-static __rte_always_inline unsigned int __rte_experimental
+__rte_experimental
+static __rte_always_inline unsigned int
 rte_stack_free_count(struct rte_stack *s)
 {
 	RTE_ASSERT(s != NULL);
@@ -222,7 +229,8 @@ rte_stack_free_count(struct rte_stack *s)
  *    - ENOMEM - insufficient memory to create the stack
  *    - ENAMETOOLONG - name size exceeds RTE_STACK_NAMESIZE
  */
-struct rte_stack *__rte_experimental
+__rte_experimental
+struct rte_stack *
 rte_stack_create(const char *name, unsigned int count, int socket_id,
 		 uint32_t flags);
 
@@ -235,7 +243,8 @@ rte_stack_create(const char *name, unsigned int count, int socket_id,
  * @param s
  *   Stack to free
  */
-void __rte_experimental
+__rte_experimental
+void
 rte_stack_free(struct rte_stack *s);
 
 /**
@@ -252,7 +261,8 @@ rte_stack_free(struct rte_stack *s);
  *    - ENOENT - Stack with name *name* not found.
  *    - EINVAL - *name* pointer is NULL.
  */
-struct rte_stack * __rte_experimental
+__rte_experimental
+struct rte_stack *
 rte_stack_lookup(const char *name);
 
 #ifdef __cplusplus

@@ -6,9 +6,9 @@ NFB poll mode driver library
 =================================
 
 The NFB poll mode driver library implements support for the Netcope
-FPGA Boards (**NFB-***), FPGA-based programmable NICs.
-The NFB PMD uses interface provided by the libnfb library to communicate
-with the NFB cards over the nfb layer.
+FPGA Boards (**NFB-40G2, NFB-100G2, NFB-200G2QL**) and Silicom **FB2CGG3** card,
+FPGA-based programmable NICs. The NFB PMD uses interface provided by the libnfb
+library to communicate with these cards over the nfb layer.
 
 More information about the
 `NFB cards <http://www.netcope.com/en/products/fpga-boards>`_
@@ -69,6 +69,26 @@ These configuration options can be modified before compilation in the
 
    Value **y** enables compilation of nfb PMD.
 
+
+Timestamps
+
+The PMD supports hardware timestamps of frame receipt on physical network interface. In order to use
+the timestamps, the hardware timestamping unit must be enabled (follow the documentation of the NFB
+products) and the device argument `timestamp=1` must be used.
+
+.. code-block:: console
+
+    $RTE_TARGET/app/testpmd -w b3:00.0,timestamp=1 <other EAL params> -- <testpmd params>
+
+When the timestamps are enabled with the *devarg*, a timestamp validity flag is set in the MBUFs
+containing received frames and timestamp is inserted into the `rte_mbuf` struct.
+
+The timestamp is an `uint64_t` field. Its lower 32 bits represent *seconds* portion of the timestamp
+(number of seconds elapsed since 1.1.1970 00:00:00 UTC) and its higher 32 bits represent
+*nanosecond* portion of the timestamp (number of nanoseconds elapsed since the beginning of the
+second in the *seconds* portion.
+
+
 Using the NFB PMD
 ----------------------
 
@@ -81,7 +101,7 @@ The NFB cards are multi-port multi-queue cards, where (generally) data from any
 Ethernet port may be sent to any queue.
 They are represented in DPDK as a single port.
 
-NFB-200G2QL card employs an addon cable which allows to connect it to two
+NFB-200G2QL card employs an add-on cable which allows to connect it to two
 physical PCI-E slots at the same time (see the diagram below).
 This is done to allow 200 Gbps of traffic to be transferred through the PCI-E
 bus (note that a single PCI-E 3.0 x16 slot provides only 125 Gbps theoretical

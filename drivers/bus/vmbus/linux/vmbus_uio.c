@@ -14,7 +14,6 @@
 #include <rte_log.h>
 #include <rte_bus.h>
 #include <rte_memory.h>
-#include <rte_eal_memconfig.h>
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_bus_vmbus.h>
@@ -166,7 +165,7 @@ vmbus_uio_map_resource_by_index(struct rte_vmbus_device *dev, int idx,
 	dev->resource[idx].addr = mapaddr;
 	vmbus_map_addr = RTE_PTR_ADD(mapaddr, size);
 
-	/* Record result of sucessful mapping for use by secondary */
+	/* Record result of successful mapping for use by secondary */
 	maps[idx].addr = mapaddr;
 	maps[idx].size = size;
 
@@ -243,7 +242,7 @@ static int vmbus_uio_map_subchan(const struct rte_vmbus_device *dev,
 	*ring_size = file_size / 2;
 	*ring_buf = mapaddr;
 
-	vmbus_map_addr = RTE_PTR_ADD(ring_buf, file_size);
+	vmbus_map_addr = RTE_PTR_ADD(mapaddr, file_size);
 	return 0;
 }
 
@@ -283,10 +282,12 @@ vmbus_uio_map_secondary_subchan(const struct rte_vmbus_device *dev,
 	if (mapaddr == MAP_FAILED)
 		VMBUS_LOG(ERR,
 			  "mmap subchan %u in secondary failed", chan->relid);
-	else
+	else {
 		VMBUS_LOG(ERR,
 			  "mmap subchan %u in secondary address mismatch",
 			  chan->relid);
+		vmbus_unmap_resource(mapaddr, 2 * ring_size);
+	}
 	return -1;
 }
 

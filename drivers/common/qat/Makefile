@@ -16,7 +16,6 @@ CFLAGS += -I$(QAT_COMPRESS_DIR)
 
 
 ifeq ($(CONFIG_RTE_LIBRTE_COMPRESSDEV),y)
-	CFLAGS += -DALLOW_EXPERIMENTAL_API
 	LDLIBS += -lrte_compressdev
 	SRCS-y += qat_comp.c
 	SRCS-y += qat_comp_pmd.c
@@ -36,6 +35,9 @@ endif
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_QAT_SYM),y)
 	LDLIBS += -lrte_cryptodev
 	LDLIBS += -lcrypto
+ifeq ($(CONFIG_RTE_LIBRTE_SECURITY),y)
+	LDLIBS += -lrte_net
+endif
 	CFLAGS += -DBUILD_QAT_SYM
 	SRCS-y += qat_sym.c
 	SRCS-y += qat_sym_session.c
@@ -49,8 +51,6 @@ ifdef build_qat
 	# library name
 	LIB = librte_pmd_qat.a
 
-	# library version
-	LIBABIVER := 1
 	# build flags
 	CFLAGS += $(WERROR_FLAGS)
 	CFLAGS += -O3

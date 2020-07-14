@@ -31,9 +31,6 @@
 
 /****** library defines ********/
 
-/* compat defines */
-#define RTE_BUILD_SHARED_LIB
-
 /* EAL defines */
 #define RTE_MAX_HEAPS 32
 #define RTE_MAX_MEMSEG_LISTS 128
@@ -41,7 +38,6 @@
 #define RTE_MAX_MEM_MB_PER_LIST 32768
 #define RTE_MAX_MEMSEG_PER_TYPE 32768
 #define RTE_MAX_MEM_MB_PER_TYPE 65536
-#define RTE_MAX_MEM_MB 524288
 #define RTE_MAX_MEMZONE 2560
 #define RTE_MAX_TAILQ 32
 #define RTE_LOG_DP_LEVEL RTE_LOG_INFO
@@ -73,6 +69,9 @@
 /* compressdev defines */
 #define RTE_COMPRESS_MAX_DEVS 64
 
+/* regexdev defines */
+#define RTE_MAX_REGEXDEV_DEVS 32
+
 /* eventdev defines */
 #define RTE_EVENT_MAX_DEVS 16
 #define RTE_EVENT_MAX_QUEUES_PER_DEV 64
@@ -97,6 +96,13 @@
 #undef RTE_SCHED_SUBPORT_TC_OV
 #define RTE_SCHED_PORT_N_GRINDERS 8
 #undef RTE_SCHED_VECTOR
+
+/* KNI defines */
+#define RTE_KNI_PREEMPT_DEFAULT 1
+
+/* rte_graph defines */
+#define RTE_GRAPH_BURST_SIZE 256
+#define RTE_LIBRTE_GRAPH_STATS 1
 
 /****** driver defines ********/
 

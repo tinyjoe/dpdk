@@ -63,6 +63,12 @@ parallel_test_list = [
         "Report":  None,
     },
     {
+        "Name":    "Lcores autotest",
+        "Command": "lcores_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
         "Name":    "Logs autotest",
         "Command": "logs_autotest",
         "Func":    logs_autotest,
@@ -107,6 +113,54 @@ parallel_test_list = [
     {
         "Name":    "LPM6 autotest",
         "Command": "lpm6_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "RIB autotest",
+        "Command": "rib_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "RIB slow autotest",
+        "Command": "rib_slow_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "RIB6 autotest",
+        "Command": "rib6_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "RIB6 slow autotest",
+        "Command": "rib6_slow_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "FIB autotest",
+        "Command": "fib_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "FIB slow autotest",
+        "Command": "fib_slow_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "FIB6 autotest",
+        "Command": "fib6_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "FIB6 slow autotest",
+        "Command": "fib6_slow_autotest",
         "Func":    default_autotest,
         "Report":  None,
     },
@@ -174,6 +228,12 @@ parallel_test_list = [
         "Name":    "Ticketlock autotest",
         "Command": "ticketlock_autotest",
         "Func":    ticketlock_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "MCSlock autotest",
+        "Command": "mcslock_autotest",
+        "Func":    mcslock_autotest,
         "Report":  None,
     },
     {
@@ -303,12 +363,6 @@ parallel_test_list = [
         "Report":  None,
     },
     {
-        "Name":    "Devargs autotest",
-        "Command": "devargs_autotest",
-        "Func":    default_autotest,
-        "Report":  None,
-    },
-    {
         "Name":    "Link bonding autotest",
         "Command": "link_bonding_autotest",
         "Func":    default_autotest,
@@ -357,6 +411,12 @@ parallel_test_list = [
         "Report":  None,
     },
     {
+        "Name":    "Bitops test",
+        "Command": "bitops_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
         "Name":    "Hash multiwriter autotest",
         "Command": "hash_multiwriter_autotest",
         "Func":    default_autotest,
@@ -399,8 +459,8 @@ parallel_test_list = [
         "Report":  None,
     },
     {
-        "Name":    "Cryptodev sw mrvl autotest",
-        "Command": "cryptodev_sw_mrvl_autotest",
+        "Name":    "Cryptodev sw mvsam autotest",
+        "Command": "cryptodev_sw_mvsam_autotest",
         "Func":    default_autotest,
         "Report":  None,
     },
@@ -518,6 +578,12 @@ parallel_test_list = [
         "Func":    default_autotest,
         "Report":  None,
     },
+    {
+        "Name":    "IPsec_SAD",
+        "Command": "ipsec_sad_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
     #
     #Please always keep all dump tests at the end and together!
     #
@@ -610,14 +676,20 @@ non_parallel_test_list = [
         "Report":  None,
     },
     {
-        "Name":    "Hash read-write concurrency autotest",
-        "Command": "hash_readwrite_autotest",
+        "Name":    "Hash read-write concurrency functional autotest",
+        "Command": "hash_readwrite_func_autotest",
         "Func":    default_autotest,
         "Report":  None,
     },
     {
-        "Name":    "Hash read-write lock-free concurrency autotest",
-        "Command": "hash_readwrite_lf_autotest",
+        "Name":    "Hash read-write concurrency perf autotest",
+        "Command": "hash_readwrite_perf_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "Hash read-write lock-free concurrency perf autotest",
+        "Command": "hash_readwrite_lf_perf_autotest",
         "Func":    default_autotest,
         "Report":  None,
     },
@@ -628,8 +700,8 @@ non_parallel_test_list = [
         "Report":      None,
     },
     {
-        "Name":       "Power ACPI cpufreq autotest",
-        "Command":    "power_acpi_cpufreq_autotest",
+        "Name":       "Power cpufreq autotest",
+        "Command":    "power_cpufreq_autotest",
         "Func":       default_autotest,
         "Report":     None,
     },
@@ -683,6 +755,18 @@ non_parallel_test_list = [
         "Report":  None,
     },
     {
+        "Name":    "FIB perf autotest",
+        "Command": "fib_perf_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "FIB6 perf autotest",
+        "Command": "fib6_perf_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
          "Name":    "Efd perf autotest",
          "Command": "efd_perf_autotest",
          "Func":    default_autotest,
@@ -697,6 +781,18 @@ non_parallel_test_list = [
     {
         "Name":    "Reciprocal division perf",
         "Command": "reciprocal_division_perf",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "RCU QSBR autotest",
+        "Command": "rcu_qsbr_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "RCU QSBR performance autotest",
+        "Command": "rcu_qsbr_perf_autotest",
         "Func":    default_autotest,
         "Report":  None,
     },

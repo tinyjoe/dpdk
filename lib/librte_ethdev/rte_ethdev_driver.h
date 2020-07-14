@@ -22,6 +22,41 @@ extern "C" {
 #endif
 
 /**
+ * RX/TX queue states
+ */
+#define RTE_ETH_QUEUE_STATE_STOPPED 0
+#define RTE_ETH_QUEUE_STATE_STARTED 1
+#define RTE_ETH_QUEUE_STATE_HAIRPIN 2
+
+/**
+ * @internal
+ * Check if the selected Rx queue is hairpin queue.
+ *
+ * @param dev
+ *  Pointer to the selected device.
+ * @param queue_id
+ *  The selected queue.
+ *
+ * @return
+ *   - (1) if the queue is hairpin queue, 0 otherwise.
+ */
+int rte_eth_dev_is_rx_hairpin_queue(struct rte_eth_dev *dev, uint16_t queue_id);
+
+/**
+ * @internal
+ * Check if the selected Tx queue is hairpin queue.
+ *
+ * @param dev
+ *  Pointer to the selected device.
+ * @param queue_id
+ *  The selected queue.
+ *
+ * @return
+ *   - (1) if the queue is hairpin queue, 0 otherwise.
+ */
+int rte_eth_dev_is_tx_hairpin_queue(struct rte_eth_dev *dev, uint16_t queue_id);
+
+/**
  * @internal
  * Returns a ethdev slot specified by the unique identifier name.
  *
@@ -146,6 +181,23 @@ rte_eth_dma_zone_reserve(const struct rte_eth_dev *eth_dev, const char *name,
 			 unsigned align, int socket_id);
 
 /**
+ * Free previously allocated memzone for HW rings.
+ *
+ * @param eth_dev
+ *   The *eth_dev* pointer is the address of the *rte_eth_dev* structure
+ * @param name
+ *   The name of the memory zone
+ * @param queue_id
+ *   The index of the queue to add to name
+ * @return
+ *   Negative errno value on error, 0 on success.
+ */
+__rte_internal
+int
+rte_eth_dma_zone_free(const struct rte_eth_dev *eth_dev, const char *name,
+		 uint16_t queue_id);
+
+/**
  * @internal
  * Atomically set the link status for the specific device.
  * It is for use by DPDK device driver use only.
@@ -225,7 +277,8 @@ rte_eth_linkstatus_get(const struct rte_eth_dev *dev,
  * @return
  *   Negative errno value on error, 0 on success.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_switch_domain_alloc(uint16_t *domain_id);
 
 /**
@@ -243,7 +296,8 @@ rte_eth_switch_domain_alloc(uint16_t *domain_id);
  * @return
  *   Negative errno value on error, 0 on success.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_switch_domain_free(uint16_t domain_id);
 
 /** Generic Ethernet device arguments  */
@@ -272,7 +326,8 @@ struct rte_eth_devargs {
  * @return
  *   Negative errno value on error, 0 on success.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_devargs_parse(const char *devargs, struct rte_eth_devargs *eth_devargs);
 
 
@@ -304,7 +359,8 @@ typedef int (*ethdev_bus_specific_init)(struct rte_eth_dev *ethdev,
  * @return
  *   Negative errno value on error, 0 on success.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_dev_create(struct rte_device *device, const char *name,
 	size_t priv_data_size,
 	ethdev_bus_specific_init bus_specific_init, void *bus_init_params,
@@ -317,7 +373,7 @@ typedef int (*ethdev_uninit_t)(struct rte_eth_dev *ethdev);
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice.
  *
- * PMD helper function for cleaing up the resources of a ethdev port on it's
+ * PMD helper function for cleaning up the resources of a ethdev port on it's
  * destruction.
  *
  * @param ethdev
@@ -328,7 +384,8 @@ typedef int (*ethdev_uninit_t)(struct rte_eth_dev *ethdev);
  * @return
  *   Negative errno value on error, 0 on success.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_dev_destroy(struct rte_eth_dev *ethdev, ethdev_uninit_t ethdev_uninit);
 
 #ifdef __cplusplus

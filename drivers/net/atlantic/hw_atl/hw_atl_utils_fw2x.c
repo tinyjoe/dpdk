@@ -6,6 +6,7 @@
  */
 
 #include <rte_ether.h>
+#include <pthread.h>
 #include "../atl_hw_regs.h"
 
 #include "../atl_types.h"
@@ -34,13 +35,12 @@
 #define HAL_ATLANTIC_WOL_FILTERS_COUNT     8
 #define HAL_ATLANTIC_UTILS_FW2X_MSG_WOL    0x0E
 
-#define HW_ATL_FW_FEATURE_EEPROM 0x03010025
 #define HW_ATL_FW_FEATURE_LED 0x03010026
 
 struct fw2x_msg_wol_pattern {
 	u8 mask[16];
 	u32 crc;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct fw2x_msg_wol {
 	u32 msg_id;
@@ -53,7 +53,7 @@ struct fw2x_msg_wol {
 	u16 reserved;
 	u32 link_up_timeout;
 	u32 link_down_timeout;
-} __attribute__((__packed__));
+} __rte_packed;
 
 static int aq_fw2x_set_link_speed(struct aq_hw_s *self, u32 speed);
 static int aq_fw2x_set_state(struct aq_hw_s *self,
@@ -62,6 +62,7 @@ static int aq_fw2x_set_state(struct aq_hw_s *self,
 static int aq_fw2x_init(struct aq_hw_s *self)
 {
 	int err = 0;
+	struct hw_aq_atl_utils_mbox mbox;
 
 	/* check 10 times by 1ms */
 	AQ_HW_WAIT_FOR(0U != (self->mbox_addr =
@@ -70,6 +71,12 @@ static int aq_fw2x_init(struct aq_hw_s *self)
 	AQ_HW_WAIT_FOR(0U != (self->rpc_addr =
 		       aq_hw_read_reg(self, HW_ATL_FW2X_MPI_RPC_ADDR)),
 		       1000U, 100U);
+
+	/* Read caps */
+	hw_atl_utils_mpi_read_stats(self, &mbox);
+
+	self->caps_lo = mbox.info.caps_lo;
+
 	return err;
 }
 
@@ -211,19 +218,21 @@ int aq_fw2x_get_mac_permanent(struct aq_hw_s *self, u8 *mac)
 	u32 mac_addr[2] = { 0 };
 	u32 efuse_addr = aq_hw_read_reg(self, HW_ATL_FW2X_MPI_EFUSE_ADDR);
 
+	pthread_mutex_lock(&self->mbox_mutex);
+
 	if (efuse_addr != 0) {
 		err = hw_atl_utils_fw_downld_dwords(self,
 						    efuse_addr + (40U * 4U),
 						    mac_addr,
 						    ARRAY_SIZE(mac_addr));
 		if (err)
-			return err;
+			goto exit;
 		mac_addr[0] = rte_constant_bswap32(mac_addr[0]);
 		mac_addr[1] = rte_constant_bswap32(mac_addr[1]);
 	}
 
-	ether_addr_copy((struct ether_addr *)mac_addr,
-			(struct ether_addr *)mac);
+	rte_ether_addr_copy((struct rte_ether_addr *)mac_addr,
+			(struct rte_ether_addr *)mac);
 
 	if ((mac[0] & 0x01U) || ((mac[0] | mac[1] | mac[2]) == 0x00U)) {
 		unsigned int rnd = (uint32_t)rte_rand();
@@ -246,6 +255,10 @@ int aq_fw2x_get_mac_permanent(struct aq_hw_s *self, u8 *mac)
 		h >>= 8;
 		mac[0] = (u8)(0xFFU & h);
 	}
+
+exit:
+	pthread_mutex_unlock(&self->mbox_mutex);
+
 	return err;
 }
 
@@ -254,6 +267,9 @@ static int aq_fw2x_update_stats(struct aq_hw_s *self)
 	int err = 0;
 	u32 mpi_opts = aq_hw_read_reg(self, HW_ATL_FW2X_MPI_CONTROL2_ADDR);
 	u32 orig_stats_val = mpi_opts & BIT(CAPS_HI_STATISTICS);
+
+
+	pthread_mutex_lock(&self->mbox_mutex);
 
 	/* Toggle statistics bit for FW to update */
 	mpi_opts = mpi_opts ^ BIT(CAPS_HI_STATISTICS);
@@ -265,9 +281,15 @@ static int aq_fw2x_update_stats(struct aq_hw_s *self)
 				       BIT(CAPS_HI_STATISTICS)),
 		       1U, 10000U);
 	if (err)
-		return err;
+		goto exit;
 
-	return hw_atl_utils_update_stats(self);
+	err = hw_atl_utils_update_stats(self);
+
+exit:
+	pthread_mutex_unlock(&self->mbox_mutex);
+
+	return err;
+
 }
 
 static int aq_fw2x_get_temp(struct aq_hw_s *self, int *temp)
@@ -276,6 +298,8 @@ static int aq_fw2x_get_temp(struct aq_hw_s *self, int *temp)
 	u32 mpi_opts = aq_hw_read_reg(self, HW_ATL_FW2X_MPI_CONTROL2_ADDR);
 	u32 temp_val = mpi_opts & BIT(CAPS_HI_TEMPERATURE);
 	u32 temp_res;
+
+	pthread_mutex_lock(&self->mbox_mutex);
 
 	/* Toggle statistics bit for FW to 0x36C.18 (CAPS_HI_TEMPERATURE) */
 	mpi_opts = mpi_opts ^ BIT(CAPS_HI_TEMPERATURE);
@@ -291,6 +315,9 @@ static int aq_fw2x_get_temp(struct aq_hw_s *self, int *temp)
 				offsetof(struct hw_aq_info, phy_temperature),
 				&temp_res,
 				sizeof(temp_res) / sizeof(u32));
+
+
+	pthread_mutex_unlock(&self->mbox_mutex);
 
 	if (err)
 		return err;
@@ -466,7 +493,15 @@ static int aq_fw2x_get_eee_rate(struct aq_hw_s *self, u32 *rate,
 	return err;
 }
 
+static int aq_fw2x_get_flow_control(struct aq_hw_s *self, u32 *fc)
+{
+	u32 mpi_state = aq_hw_read_reg(self, HW_ATL_FW2X_MPI_CONTROL2_ADDR);
 
+	*fc = ((mpi_state & BIT(CAPS_HI_PAUSE)) ? AQ_NIC_FC_RX : 0) |
+	      ((mpi_state & BIT(CAPS_HI_ASYMMETRIC_PAUSE)) ? AQ_NIC_FC_TX : 0);
+
+	return 0;
+}
 
 static int aq_fw2x_set_flow_control(struct aq_hw_s *self)
 {
@@ -491,14 +526,19 @@ static int aq_fw2x_led_control(struct aq_hw_s *self, u32 mode)
 static int aq_fw2x_get_eeprom(struct aq_hw_s *self, int dev_addr,
 			      u32 *data, u32 len, u32 offset)
 {
-	int err = 0;
-	struct smbus_read_request request;
-	u32 mpi_opts;
+	u32 bytes_remains = len % sizeof(u32);
+	u32 num_dwords = len / sizeof(u32);
+	struct smbus_request request;
 	u32 result = 0;
+	u32 mpi_opts;
+	int err = 0;
 
-	if (self->fw_ver_actual < HW_ATL_FW_FEATURE_EEPROM)
+	if ((self->caps_lo & BIT(CAPS_LO_SMBUS_READ)) == 0)
 		return -EOPNOTSUPP;
 
+	pthread_mutex_lock(&self->mbox_mutex);
+
+	request.msg_id = 0;
 	request.device_id = dev_addr;
 	request.address = offset;
 	request.length = len;
@@ -509,7 +549,7 @@ static int aq_fw2x_get_eeprom(struct aq_hw_s *self, int dev_addr,
 				sizeof(request) / sizeof(u32));
 
 	if (err < 0)
-		return err;
+		goto exit;
 
 	/* Toggle 0x368.CAPS_LO_SMBUS_READ bit */
 	mpi_opts = aq_hw_read_reg(self, HW_ATL_FW2X_MPI_CONTROL_ADDR);
@@ -524,62 +564,69 @@ static int aq_fw2x_get_eeprom(struct aq_hw_s *self, int dev_addr,
 		10U, 10000U);
 
 	if (err < 0)
-		return err;
+		goto exit;
 
 	err = hw_atl_utils_fw_downld_dwords(self, self->rpc_addr + sizeof(u32),
 			&result,
 			sizeof(result) / sizeof(u32));
 
 	if (err < 0)
-		return err;
+		goto exit;
 
-	if (result == 0) {
-		u32 num_dwords = len / sizeof(u32);
-		u32 bytes_remains = len % sizeof(u32);
-
-		if (num_dwords) {
-			err = hw_atl_utils_fw_downld_dwords(self,
-				self->rpc_addr + sizeof(u32) * 2,
-				data,
-				num_dwords);
-
-			if (err < 0)
-				return err;
-		}
-
-		if (bytes_remains) {
-			u32 val = 0;
-
-			err = hw_atl_utils_fw_downld_dwords(self,
-				self->rpc_addr + sizeof(u32) * 2 + num_dwords,
-				&val,
-				sizeof(u32));
-
-			if (err < 0)
-				return err;
-
-			rte_memcpy((u8 *)data + len - bytes_remains,
-				   &val, bytes_remains);
-		}
+	if (result) {
+		err = -EIO;
+		goto exit;
 	}
 
-	return 0;
+	if (num_dwords) {
+		err = hw_atl_utils_fw_downld_dwords(self,
+			self->rpc_addr + sizeof(u32) * 2,
+			data,
+			num_dwords);
+
+		if (err < 0)
+			goto exit;
+	}
+
+	if (bytes_remains) {
+		u32 val = 0;
+
+		err = hw_atl_utils_fw_downld_dwords(self,
+			self->rpc_addr + (sizeof(u32) * 2) +
+			(num_dwords * sizeof(u32)),
+			&val,
+			1);
+
+		if (err < 0)
+			goto exit;
+
+		rte_memcpy((u8 *)data + len - bytes_remains,
+				&val, bytes_remains);
+	}
+
+exit:
+	pthread_mutex_unlock(&self->mbox_mutex);
+
+	return err;
 }
 
 
 static int aq_fw2x_set_eeprom(struct aq_hw_s *self, int dev_addr,
-			      u32 *data, u32 len)
+			      u32 *data, u32 len, u32 offset)
 {
-	struct smbus_write_request request;
+	struct smbus_request request;
 	u32 mpi_opts, result = 0;
 	int err = 0;
 
-	if (self->fw_ver_actual < HW_ATL_FW_FEATURE_EEPROM)
+	if ((self->caps_lo & BIT(CAPS_LO_SMBUS_WRITE)) == 0)
 		return -EOPNOTSUPP;
 
+	request.msg_id = 0;
 	request.device_id = dev_addr;
-	request.address = 0;
+	request.address = offset;
 	request.length = len;
+
+	pthread_mutex_lock(&self->mbox_mutex);
 
 	/* Write SMBUS request to cfg memory */
 	err = hw_atl_utils_fw_upload_dwords(self, self->rpc_addr,
@@ -587,16 +634,37 @@ static int aq_fw2x_set_eeprom(struct aq_hw_s *self, int dev_addr,
 				sizeof(request) / sizeof(u32));
 
 	if (err < 0)
-		return err;
+		goto exit;
 
 	/* Write SMBUS data to cfg memory */
-	err = hw_atl_utils_fw_upload_dwords(self,
-				self->rpc_addr + sizeof(request),
-				(u32 *)(void *)data,
-				RTE_ALIGN(len, sizeof(u32)));
+	u32 num_dwords = len / sizeof(u32);
+	u32 bytes_remains = len % sizeof(u32);
 
-	if (err < 0)
-		return err;
+	if (num_dwords) {
+		err = hw_atl_utils_fw_upload_dwords(self,
+			self->rpc_addr + sizeof(request),
+			(u32 *)(void *)data,
+			num_dwords);
+
+		if (err < 0)
+			goto exit;
+	}
+
+	if (bytes_remains) {
+		u32 val = 0;
+
+		rte_memcpy(&val, (u8 *)data + (sizeof(u32) * num_dwords),
+			   bytes_remains);
+
+		err = hw_atl_utils_fw_upload_dwords(self,
+			self->rpc_addr + sizeof(request) +
+			(num_dwords * sizeof(u32)),
+			&val,
+			1);
+
+		if (err < 0)
+			goto exit;
+	}
 
 	/* Toggle 0x368.CAPS_LO_SMBUS_WRITE bit */
 	mpi_opts = aq_hw_read_reg(self, HW_ATL_FW2X_MPI_CONTROL_ADDR);
@@ -610,7 +678,7 @@ static int aq_fw2x_set_eeprom(struct aq_hw_s *self, int dev_addr,
 		10U, 10000U);
 
 	if (err < 0)
-		return err;
+		goto exit;
 
 	/* Read status of write operation */
 	err = hw_atl_utils_fw_downld_dwords(self, self->rpc_addr + sizeof(u32),
@@ -618,9 +686,65 @@ static int aq_fw2x_set_eeprom(struct aq_hw_s *self, int dev_addr,
 				sizeof(result) / sizeof(u32));
 
 	if (err < 0)
-		return err;
+		goto exit;
 
-	return 0;
+	if (result) {
+		err = -EIO;
+		goto exit;
+	}
+
+exit:
+	pthread_mutex_unlock(&self->mbox_mutex);
+
+	return err;
+}
+
+static int aq_fw2x_send_macsec_request(struct aq_hw_s *self,
+				struct macsec_msg_fw_request *req,
+				struct macsec_msg_fw_response *response)
+{
+	int err = 0;
+	u32 mpi_opts = 0;
+
+	if (!req || !response)
+		return 0;
+
+	if ((self->caps_lo & BIT(CAPS_LO_MACSEC)) == 0)
+		return -EOPNOTSUPP;
+
+	pthread_mutex_lock(&self->mbox_mutex);
+
+	/* Write macsec request to cfg memory */
+	err = hw_atl_utils_fw_upload_dwords(self, self->rpc_addr,
+		(u32 *)(void *)req,
+		RTE_ALIGN(sizeof(*req) / sizeof(u32), sizeof(u32)));
+
+	if (err < 0)
+		goto exit;
+
+	/* Toggle 0x368.CAPS_LO_MACSEC bit */
+	mpi_opts = aq_hw_read_reg(self, HW_ATL_FW2X_MPI_CONTROL_ADDR);
+	mpi_opts ^= BIT(CAPS_LO_MACSEC);
+
+	aq_hw_write_reg(self, HW_ATL_FW2X_MPI_CONTROL_ADDR, mpi_opts);
+
+	/* Wait until REQUEST_BIT matched in 0x370 */
+	AQ_HW_WAIT_FOR((aq_hw_read_reg(self, HW_ATL_FW2X_MPI_STATE_ADDR) &
+		BIT(CAPS_LO_MACSEC)) == (mpi_opts & BIT(CAPS_LO_MACSEC)),
+		1000U, 10000U);
+
+	if (err < 0)
+		goto exit;
+
+	/* Read status of write operation */
+	err = hw_atl_utils_fw_downld_dwords(self, self->rpc_addr + sizeof(u32),
+		(u32 *)(void *)response,
+		RTE_ALIGN(sizeof(*response) / sizeof(u32), sizeof(u32)));
+
+exit:
+	pthread_mutex_unlock(&self->mbox_mutex);
+
+	return err;
 }
 
 const struct aq_fw_ops aq_fw_2x_ops = {
@@ -637,8 +761,10 @@ const struct aq_fw_ops aq_fw_2x_ops = {
 	.get_cable_len = aq_fw2x_get_cable_len,
 	.set_eee_rate = aq_fw2x_set_eee_rate,
 	.get_eee_rate = aq_fw2x_get_eee_rate,
+	.get_flow_control = aq_fw2x_get_flow_control,
 	.set_flow_control = aq_fw2x_set_flow_control,
 	.led_control = aq_fw2x_led_control,
 	.get_eeprom = aq_fw2x_get_eeprom,
 	.set_eeprom = aq_fw2x_set_eeprom,
+	.send_macsec_req = aq_fw2x_send_macsec_request,
 };

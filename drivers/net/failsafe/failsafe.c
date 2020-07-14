@@ -15,8 +15,6 @@
 
 #include "failsafe_private.h"
 
-int failsafe_logtype;
-
 const char pmd_failsafe_driver_name[] = FAILSAFE_DRIVER_NAME;
 static const struct rte_eth_link eth_link = {
 	.link_speed = ETH_SPEED_NUM_10G,
@@ -166,7 +164,7 @@ static int
 fs_eth_dev_create(struct rte_vdev_device *vdev)
 {
 	struct rte_eth_dev *dev;
-	struct ether_addr *mac;
+	struct rte_ether_addr *mac;
 	struct fs_priv *priv;
 	struct sub_device *sdev;
 	const char *params;
@@ -190,6 +188,7 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 	}
 	priv = PRIV(dev);
 	priv->data = dev->data;
+	priv->rxp = FS_RX_PROXY_INIT;
 	dev->dev_ops = &failsafe_ops;
 	dev->data->mac_addrs = &PRIV(dev)->mac_addrs[0];
 	dev->data->dev_link = eth_link;
@@ -253,8 +252,8 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 		 */
 		FOREACH_SUBDEV(sdev, i, dev)
 			if (sdev->state >= DEV_PROBED) {
-				ether_addr_copy(&ETH(sdev)->data->mac_addrs[0],
-						mac);
+				rte_ether_addr_copy(
+					&ETH(sdev)->data->mac_addrs[0], mac);
 				break;
 			}
 		/*
@@ -265,7 +264,7 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 		 * probed slaves.
 		 */
 		if (i == priv->subs_tail)
-			eth_random_addr(&mac->addr_bytes[0]);
+			rte_eth_random_addr(&mac->addr_bytes[0]);
 	}
 	INFO("MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
 		mac->addr_bytes[0], mac->addr_bytes[1],
@@ -364,6 +363,10 @@ rte_pmd_failsafe_probe(struct rte_vdev_device *vdev)
 		 * A sub-device can be plugged later.
 		 */
 		FOREACH_SUBDEV(sdev, i, eth_dev) {
+			/* skip empty devargs */
+			if (sdev->devargs.name[0] == '\0')
+				continue;
+
 			/* rebuild devargs to be able to get the bus name. */
 			ret = rte_devargs_parse(&devargs,
 						sdev->devargs.name);
@@ -374,7 +377,7 @@ rte_pmd_failsafe_probe(struct rte_vdev_device *vdev)
 			}
 			if (!devargs_already_listed(&devargs)) {
 				ret = rte_dev_probe(devargs.name);
-				if (ret != 0) {
+				if (ret < 0) {
 					ERROR("Failed to probe devargs %s",
 					      devargs.name);
 					continue;
@@ -405,10 +408,4 @@ static struct rte_vdev_driver failsafe_drv = {
 
 RTE_PMD_REGISTER_VDEV(net_failsafe, failsafe_drv);
 RTE_PMD_REGISTER_PARAM_STRING(net_failsafe, PMD_FAILSAFE_PARAM_STRING);
-
-RTE_INIT(failsafe_init_log)
-{
-	failsafe_logtype = rte_log_register("pmd.net.failsafe");
-	if (failsafe_logtype >= 0)
-		rte_log_set_level(failsafe_logtype, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(failsafe_logtype, pmd.net.failsafe, NOTICE)

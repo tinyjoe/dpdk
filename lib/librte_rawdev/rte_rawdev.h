@@ -12,9 +12,6 @@
  *
  * This API allow applications to configure and use generic devices having
  * no specific type already available in DPDK.
- *
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
  */
 
 #ifdef __cplusplus
@@ -25,7 +22,7 @@ extern "C" {
 #include <rte_memory.h>
 #include <rte_errno.h>
 
-/* Rawdevice object - essentially a void to be typecasted by implementation */
+/* Rawdevice object - essentially a void to be typecast by implementation */
 typedef void *rte_rawdev_obj_t;
 
 /**
@@ -77,7 +74,13 @@ struct rte_rawdev_info;
  *
  * @param[out] dev_info
  *   A pointer to a structure of type *rte_rawdev_info* to be filled with the
- *   contextual information of the device.
+ *   contextual information of the device. The dev_info->dev_private field
+ *   should point to an appropriate buffer space for holding the device-
+ *   specific info for that hardware.
+ *   If the dev_private field is set to NULL, then the device-specific info
+ *   function will not be called and only basic information about the device
+ *   will be returned. This can be used to safely query the type of a rawdev
+ *   instance without needing to know the size of the private data to return.
  *
  * @return
  *   - 0: Success, driver updates the contextual information of the raw device
@@ -244,7 +247,7 @@ rte_rawdev_close(uint16_t dev_id);
  * @param dev_id
  *   Raw device identifiers
  * @return
- *   0 for sucessful reset,
+ *   0 for successful reset,
  *  !0 for failure in resetting
  */
 int
@@ -373,7 +376,7 @@ rte_rawdev_set_attr(uint16_t dev_id,
  * @param dev_id
  *   The identifier of the device to configure.
  * @param buffers
- *   Collection of buffers for enqueueing
+ *   Collection of buffers for enqueuing
  * @param count
  *   Count of buffers to enqueue
  * @param context

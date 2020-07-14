@@ -27,8 +27,6 @@
 
 #define VDEV_MP_KEY	"bus_vdev_mp"
 
-int vdev_logtype_bus;
-
 /* Forward declare to access virtual bus name */
 static struct rte_bus rte_vdev_bus;
 
@@ -409,6 +407,10 @@ vdev_scan(void)
 
 	if (rte_mp_action_register(VDEV_MP_KEY, vdev_action) < 0 &&
 	    rte_errno != EEXIST) {
+		/* for primary, unsupported IPC is not an error */
+		if (rte_eal_process_type() == RTE_PROC_PRIMARY &&
+				rte_errno == ENOTSUP)
+			goto scan;
 		VDEV_LOG(ERR, "Failed to add vdev mp action");
 		return -1;
 	}
@@ -436,6 +438,7 @@ vdev_scan(void)
 		/* Fall through to allow private vdevs in secondary process */
 	}
 
+scan:
 	/* call custom scan callbacks if any */
 	rte_spinlock_lock(&vdev_custom_scan_lock);
 	TAILQ_FOREACH(custom_scan, &vdev_custom_scans, next) {
@@ -552,10 +555,4 @@ static struct rte_bus rte_vdev_bus = {
 };
 
 RTE_REGISTER_BUS(vdev, rte_vdev_bus);
-
-RTE_INIT(vdev_init_log)
-{
-	vdev_logtype_bus = rte_log_register("bus.vdev");
-	if (vdev_logtype_bus >= 0)
-		rte_log_set_level(vdev_logtype_bus, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(vdev_logtype_bus, bus.vdev, NOTICE);

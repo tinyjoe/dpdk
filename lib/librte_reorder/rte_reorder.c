@@ -11,6 +11,7 @@
 #include <rte_eal_memconfig.h>
 #include <rte_errno.h>
 #include <rte_malloc.h>
+#include <rte_tailq.h>
 
 #include "rte_reorder.h"
 
@@ -119,7 +120,7 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 		return NULL;
 	}
 
-	rte_rwlock_write_lock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_lock();
 
 	/* guarantee there's no existing */
 	TAILQ_FOREACH(te, reorder_list, next) {
@@ -152,7 +153,7 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 	}
 
 exit:
-	rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_unlock();
 	return b;
 }
 
@@ -193,7 +194,7 @@ rte_reorder_free(struct rte_reorder_buffer *b)
 
 	reorder_list = RTE_TAILQ_CAST(rte_reorder_tailq.head, rte_reorder_list);
 
-	rte_rwlock_write_lock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_lock();
 
 	/* find our tailq entry */
 	TAILQ_FOREACH(te, reorder_list, next) {
@@ -201,13 +202,13 @@ rte_reorder_free(struct rte_reorder_buffer *b)
 			break;
 	}
 	if (te == NULL) {
-		rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+		rte_mcfg_tailq_write_unlock();
 		return;
 	}
 
 	TAILQ_REMOVE(reorder_list, te, next);
 
-	rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_unlock();
 
 	rte_reorder_free_mbufs(b);
 
@@ -222,15 +223,20 @@ rte_reorder_find_existing(const char *name)
 	struct rte_tailq_entry *te;
 	struct rte_reorder_list *reorder_list;
 
+	if (name == NULL) {
+		rte_errno = EINVAL;
+		return NULL;
+	}
+
 	reorder_list = RTE_TAILQ_CAST(rte_reorder_tailq.head, rte_reorder_list);
 
-	rte_rwlock_read_lock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_read_lock();
 	TAILQ_FOREACH(te, reorder_list, next) {
 		b = (struct rte_reorder_buffer *) te->data;
 		if (strncmp(name, b->name, RTE_REORDER_NAMESIZE) == 0)
 			break;
 	}
-	rte_rwlock_read_unlock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_read_unlock();
 
 	if (te == NULL) {
 		rte_errno = ENOENT;
@@ -295,8 +301,14 @@ int
 rte_reorder_insert(struct rte_reorder_buffer *b, struct rte_mbuf *mbuf)
 {
 	uint32_t offset, position;
-	struct cir_buffer *order_buf = &b->order_buf;
+	struct cir_buffer *order_buf;
 
+	if (b == NULL || mbuf == NULL) {
+		rte_errno = EINVAL;
+		return -1;
+	}
+
+	order_buf = &b->order_buf;
 	if (!b->is_initialized) {
 		b->min_seqn = mbuf->seqn;
 		b->is_initialized = 1;

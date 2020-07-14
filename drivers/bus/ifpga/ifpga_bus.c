@@ -24,14 +24,13 @@
 #include <rte_kvargs.h>
 #include <rte_alarm.h>
 #include <rte_string_fns.h>
+#include <rte_debug.h>
 
 #include "rte_rawdev.h"
 #include "rte_rawdev_pmd.h"
 #include "rte_bus_ifpga.h"
 #include "ifpga_logs.h"
 #include "ifpga_common.h"
-
-int ifpga_bus_logtype;
 
 /* Forward declaration to access Intel FPGA bus
  * on which iFPGA devices are connected
@@ -68,6 +67,19 @@ ifpga_find_afu_dev(const struct rte_rawdev *rdev,
 		if (afu_dev &&
 			afu_dev->rawdev == rdev &&
 			!ifpga_afu_id_cmp(&afu_dev->id, afu_id))
+			return afu_dev;
+	}
+	return NULL;
+}
+
+struct rte_afu_device *
+rte_ifpga_find_afu_by_name(const char *name)
+{
+	struct rte_afu_device *afu_dev = NULL;
+
+	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
+		if (afu_dev &&
+			!strcmp(afu_dev->device.name, name))
 			return afu_dev;
 	}
 	return NULL;
@@ -460,10 +472,4 @@ static struct rte_bus rte_ifpga_bus = {
 };
 
 RTE_REGISTER_BUS(IFPGA_BUS_NAME, rte_ifpga_bus);
-
-RTE_INIT(ifpga_init_log)
-{
-	ifpga_bus_logtype = rte_log_register("bus.ifpga");
-	if (ifpga_bus_logtype >= 0)
-		rte_log_set_level(ifpga_bus_logtype, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(ifpga_bus_logtype, bus.ifpga, NOTICE);

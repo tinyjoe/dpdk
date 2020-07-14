@@ -91,7 +91,10 @@ The application requires a number of command line options:
 
 .. code-block:: console
 
-    ./build/l2fwd [EAL options] -- -p PORTMASK [-q NQ] --[no-]mac-updating
+    ./build/l2fwd [EAL options] -- -p PORTMASK
+                                   [-q NQ]
+                                   --[no-]mac-updating
+                                   [--portmap="(port, port)[,(port, port)]"]
 
 where,
 
@@ -99,7 +102,9 @@ where,
 
 *   q NQ: A number of queues (=ports) per lcore (default is 1)
 
-*   --[no-]mac-updating: Enable or disable MAC addresses updating (enabled by default).
+*   --[no-]mac-updating: Enable or disable MAC addresses updating (enabled by default)
+
+*   --portmap="(port,port)[,(port,port)]": Determines forwarding ports mapping.
 
 To run the application in linux environment with 4 lcores, 16 ports and 8 RX queues per lcore and MAC address
 updating enabled, issue the command:
@@ -107,6 +112,14 @@ updating enabled, issue the command:
 .. code-block:: console
 
     $ ./build/l2fwd -l 0-3 -n 4 -- -q 8 -p ffff
+
+To run the application in linux environment with 4 lcores, 4 ports, 8 RX queues
+per lcore, to forward RX traffic of ports 0 & 1 on ports 2 & 3 respectively and
+vice versa, issue the command:
+
+.. code-block:: console
+
+    $ ./build/l2fwd -l 0-3 -n 4 -- -q 8 -p f --portmap="(0,2)(1,3)"
 
 Refer to the *DPDK Getting Started Guide* for general information on running applications
 and the Environment Abstraction Layer (EAL) options.
@@ -194,9 +207,6 @@ in the *DPDK Programmer's Guide* - Rel 1.4 EAR and the *DPDK API Reference*.
 
 .. code-block:: c
 
-    if (rte_pci_probe() < 0)
-        rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
-
     /* reset l2fwd_dst_ports */
 
     for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++)
@@ -225,12 +235,6 @@ in the *DPDK Programmer's Guide* - Rel 1.4 EAR and the *DPDK API Reference*.
 
         rte_eth_dev_info_get((uint8_t) portid, &dev_info);
     }
-
-Observe that:
-
-*   rte_igb_pmd_init_all() simultaneously registers the driver as a PCI driver and as an Ethernet* Poll Mode Driver.
-
-*   rte_pci_probe() parses the devices on the PCI bus and initializes recognized devices.
 
 The next step is to configure the RX and TX queues.
 For each port, there is only one RX queue (only one lcore is able to poll a given port).
@@ -280,18 +284,6 @@ The list of queues that must be polled for a given lcore is stored in a private 
 
 The values n_rx_port and rx_port_list[] are used in the main packet processing loop
 (see :ref:`l2_fwd_app_rx_tx_packets`).
-
-The global configuration for the RX queues is stored in a static structure:
-
-.. code-block:: c
-
-    static const struct rte_eth_rxconf rx_conf = {
-        .rx_thresh = {
-            .pthresh = RX_PTHRESH,
-            .hthresh = RX_HTHRESH,
-            .wthresh = RX_WTHRESH,
-        },
-    };
 
 .. _l2_fwd_app_tx_init:
 
@@ -367,13 +359,13 @@ Naturally, the number of ports in the portmask must be even, otherwise, the appl
     static void
     l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid)
     {
-        struct ether_hdr *eth;
+        struct rte_ether_hdr *eth;
         void *tmp;
         unsigned dst_port;
 
         dst_port = l2fwd_dst_ports[portid];
 
-        eth = rte_pktmbuf_mtod(m, struct ether_hdr *);
+        eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
         /* 02:00:00:00:00:xx */
 
@@ -383,7 +375,7 @@ Naturally, the number of ports in the portmask must be even, otherwise, the appl
 
         /* src addr */
 
-        ether_addr_copy(&l2fwd_ports_eth_addr[dst_port], &eth->s_addr);
+        rte_ether_addr_copy(&l2fwd_ports_eth_addr[dst_port], &eth->s_addr);
 
         l2fwd_send_packet(m, (uint8_t) dst_port);
     }

@@ -26,6 +26,12 @@ int hw_atl_b0_hw_reset(struct aq_hw_s *self)
 	return err;
 }
 
+int hw_atl_b0_set_fc(struct aq_hw_s *self, u32 fc, u32 tc)
+{
+	hw_atl_rpb_rx_xoff_en_per_tc_set(self, !!(fc & AQ_NIC_FC_RX), tc);
+	return 0;
+}
+
 static int hw_atl_b0_hw_qos_set(struct aq_hw_s *self)
 {
 	u32 tc = 0U;
@@ -286,6 +292,8 @@ int hw_atl_b0_hw_init_rx_path(struct aq_hw_s *self)
 	hw_atl_rpfl2broadcast_flr_act_set(self, 1U);
 	hw_atl_rpfl2broadcast_count_threshold_set(self, 0xFFFFU & (~0U / 256U));
 
+	hw_atl_rpfl2broadcast_en_set(self, 1U);
+
 	hw_atl_rdm_rx_dca_en_set(self, 0U);
 	hw_atl_rdm_rx_dca_mode_set(self, 0U);
 
@@ -503,4 +511,3 @@ int hw_atl_b0_hw_ring_rx_stop(struct aq_hw_s *self, int index)
 	hw_atl_rdm_rx_desc_en_set(self, 0U, index);
 	return aq_hw_err_from_flags(self);
 }
-

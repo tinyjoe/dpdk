@@ -22,8 +22,6 @@
 # define TEST_TRACE_FAILURE(_file, _line, _func)
 #endif
 
-#define RTE_TEST_TRACE_FAILURE TEST_TRACE_FAILURE
-
 #include <rte_test.h>
 
 #define TEST_ASSERT RTE_TEST_ASSERT
@@ -156,6 +154,7 @@ extern const char *prgname;
 int commands_init(void);
 
 int test_mp_secondary(void);
+int test_timer_secondary(void);
 
 int test_set_rxtx_conf(cmdline_fixed_string_t mode);
 int test_set_rxtx_anchor(cmdline_fixed_string_t type);

@@ -9,4 +9,10 @@ sources = files(
 	'qede_filter.c',
 	'qede_main.c',
 	'qede_rxtx.c',
+	'qede_debug.c',
+	'qede_regs.c',
 )
+
+if cc.has_argument('-Wno-format-nonliteral')
+	cflags += '-Wno-format-nonliteral'
+endif

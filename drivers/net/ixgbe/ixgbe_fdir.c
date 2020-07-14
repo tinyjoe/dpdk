@@ -12,7 +12,7 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
-#include <rte_ether.h>
+#include <rte_vxlan.h>
 #include <rte_ethdev_driver.h>
 #include <rte_malloc.h>
 
@@ -77,7 +77,6 @@
 	rte_memcpy((ipaddr), ipv6_addr, sizeof(ipv6_addr));\
 } while (0)
 
-#define DEFAULT_VXLAN_PORT 4789
 #define IXGBE_FDIRIP6M_INNER_MAC_SHIFT 4
 
 static int fdir_erase_filter_82599(struct ixgbe_hw *hw, uint32_t fdirhash);
@@ -110,10 +109,6 @@ static int ixgbe_add_del_fdir_filter(struct rte_eth_dev *dev,
 			      bool del,
 			      bool update);
 static int ixgbe_fdir_flush(struct rte_eth_dev *dev);
-static void ixgbe_fdir_info_get(struct rte_eth_dev *dev,
-			struct rte_eth_fdir_info *fdir_info);
-static void ixgbe_fdir_stats_get(struct rte_eth_dev *dev,
-			struct rte_eth_fdir_stats *fdir_stats);
 
 /**
  * This function is based on ixgbe_fdir_enable_82599() in base/ixgbe_82599.c.
@@ -366,7 +361,7 @@ fdir_set_input_mask_x550(struct rte_eth_dev *dev)
 
 	/* set the default UDP port for VxLAN */
 	if (mode == RTE_FDIR_MODE_PERFECT_TUNNEL)
-		IXGBE_WRITE_REG(hw, IXGBE_VXLANCTRL, DEFAULT_VXLAN_PORT);
+		IXGBE_WRITE_REG(hw, IXGBE_VXLANCTRL, RTE_VXLAN_DEFAULT_PORT);
 
 	/* some bits must be set for mac vlan or tunnel mode */
 	fdirm |= IXGBE_FDIRM_L4P | IXGBE_FDIRM_L3P;
@@ -1415,7 +1410,7 @@ ixgbe_fdir_flush(struct rte_eth_dev *dev)
 }
 
 #define FDIRENTRIES_NUM_SHIFT 10
-static void
+void
 ixgbe_fdir_info_get(struct rte_eth_dev *dev, struct rte_eth_fdir_info *fdir_info)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1474,7 +1469,7 @@ ixgbe_fdir_info_get(struct rte_eth_dev *dev, struct rte_eth_fdir_info *fdir_info
 			(uint8_t)((info->mask.flex_bytes_mask & 0xFF00) >> 8);
 }
 
-static void
+void
 ixgbe_fdir_stats_get(struct rte_eth_dev *dev, struct rte_eth_fdir_stats *fdir_stats)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);

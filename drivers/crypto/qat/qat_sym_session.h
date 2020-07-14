@@ -1,11 +1,14 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2015-2018 Intel Corporation
+ * Copyright(c) 2015-2019 Intel Corporation
  */
 #ifndef _QAT_SYM_SESSION_H_
 #define _QAT_SYM_SESSION_H_
 
 #include <rte_crypto.h>
 #include <rte_cryptodev_pmd.h>
+#ifdef RTE_LIBRTE_SECURITY
+#include <rte_security.h>
+#endif
 
 #include "qat_common.h"
 #include "icp_qat_hw.h"
@@ -20,10 +23,18 @@
 
 #define KASUMI_F8_KEY_MODIFIER_4_BYTES   0x55555555
 
+/*
+ * AES-GCM J0 length
+ */
+#define AES_GCM_J0_LEN 16
+
 /* 3DES key sizes */
 #define QAT_3DES_KEY_SZ_OPT1 24 /* Keys are independent */
 #define QAT_3DES_KEY_SZ_OPT2 16 /* K3=K1 */
 #define QAT_3DES_KEY_SZ_OPT3 8 /* K1=K2=K3 */
+
+/* 96-bit case of IV for CCP/GCM single pass algorithm */
+#define QAT_AES_GCM_SPC_IV_SIZE 12
 
 
 #define QAT_AES_HW_CONFIG_CBC_ENC(alg) \
@@ -59,6 +70,7 @@ struct qat_sym_session {
 	enum icp_qat_hw_cipher_mode qat_mode;
 	enum icp_qat_hw_auth_algo qat_hash_alg;
 	enum icp_qat_hw_auth_op auth_op;
+	enum icp_qat_hw_auth_mode auth_mode;
 	void *bpi_ctx;
 	struct qat_sym_cd cd;
 	uint8_t *cd_cur_ptr;
@@ -78,6 +90,7 @@ struct qat_sym_session {
 	rte_spinlock_t lock;	/* protects this struct */
 	enum qat_device_gen min_qat_dev_gen;
 	uint8_t aes_cmac;
+	uint8_t is_single_pass;
 };
 
 int
@@ -91,7 +104,8 @@ qat_sym_session_set_parameters(struct rte_cryptodev *dev,
 		struct rte_crypto_sym_xform *xform, void *session_private);
 
 int
-qat_sym_session_configure_aead(struct rte_crypto_sym_xform *xform,
+qat_sym_session_configure_aead(struct rte_cryptodev *dev,
+				struct rte_crypto_sym_xform *xform,
 				struct qat_sym_session *session);
 
 int
@@ -106,12 +120,12 @@ qat_sym_session_configure_auth(struct rte_cryptodev *dev,
 
 int
 qat_sym_session_aead_create_cd_cipher(struct qat_sym_session *cd,
-						uint8_t *enckey,
+						const uint8_t *enckey,
 						uint32_t enckeylen);
 
 int
 qat_sym_session_aead_create_cd_auth(struct qat_sym_session *cdesc,
-						uint8_t *authkey,
+						const uint8_t *authkey,
 						uint32_t authkeylen,
 						uint32_t aad_length,
 						uint32_t digestsize,
@@ -144,5 +158,13 @@ int
 qat_cipher_get_block_size(enum icp_qat_hw_cipher_algo qat_cipher_alg);
 int
 qat_sym_validate_zuc_key(int key_len, enum icp_qat_hw_cipher_algo *alg);
+
+#ifdef RTE_LIBRTE_SECURITY
+int
+qat_security_session_create(void *dev, struct rte_security_session_conf *conf,
+		struct rte_security_session *sess, struct rte_mempool *mempool);
+int
+qat_security_session_destroy(void *dev, struct rte_security_session *sess);
+#endif
 
 #endif /* _QAT_SYM_SESSION_H_ */

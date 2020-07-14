@@ -9,7 +9,7 @@
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
-#include <rte_pause.h>
+#include <rte_cycles.h>
 #include <rte_bus_vdev.h>
 #include <rte_ip.h>
 
@@ -26,7 +26,7 @@
 #include "test_cryptodev.h"
 
 #define VDEV_ARGS_SIZE	100
-#define MAX_NB_SESSIONS	100
+#define MAX_NB_SESSIONS	200
 #define MAX_NB_SAS		2
 #define REPLAY_WIN_0	0
 #define REPLAY_WIN_32	32
@@ -42,6 +42,7 @@
 #define OUTBOUND_SPI	17
 #define BURST_SIZE		32
 #define REORDER_PKTS	1
+#define DEQUEUE_COUNT	1000
 
 struct user_params {
 	enum rte_crypto_sym_xform_type auth;
@@ -79,7 +80,6 @@ struct ipsec_unitest_params {
 	struct rte_mbuf *obuf[BURST_SIZE], *ibuf[BURST_SIZE],
 		*testbuf[BURST_SIZE];
 
-	uint8_t *digest;
 	uint16_t pkt_index;
 };
 
@@ -93,8 +93,8 @@ struct ipsec_test_cfg {
 };
 
 static const struct ipsec_test_cfg test_cfg[] = {
-
 	{REPLAY_WIN_0, ESN_DISABLED, 0, DATA_64_BYTES, 1, 0},
+	{REPLAY_WIN_0, ESN_DISABLED, 0, DATA_64_BYTES, BURST_SIZE, 0},
 	{REPLAY_WIN_0, ESN_DISABLED, 0, DATA_80_BYTES, BURST_SIZE,
 		REORDER_PKTS},
 	{REPLAY_WIN_32, ESN_ENABLED, 0, DATA_100_BYTES, 1, 0},
@@ -110,8 +110,6 @@ static const int num_cfg = RTE_DIM(test_cfg);
 static struct ipsec_testsuite_params testsuite_params = { NULL };
 static struct ipsec_unitest_params unittest_params;
 static struct user_params uparams;
-
-static uint8_t global_key[128] = { 0 };
 
 struct supported_cipher_algo {
 	const char *keyword;
@@ -215,35 +213,31 @@ fill_crypto_xform(struct ipsec_unitest_params *ut_params,
 	const struct supported_auth_algo *auth_algo,
 	const struct supported_cipher_algo *cipher_algo)
 {
-	ut_params->auth_xform.type = RTE_CRYPTO_SYM_XFORM_AUTH;
-	ut_params->auth_xform.auth.algo = auth_algo->algo;
-	ut_params->auth_xform.auth.key.data = global_key;
-	ut_params->auth_xform.auth.key.length = auth_algo->key_len;
-	ut_params->auth_xform.auth.digest_length = auth_algo->digest_len;
-	ut_params->auth_xform.auth.op = RTE_CRYPTO_AUTH_OP_VERIFY;
-
 	ut_params->cipher_xform.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 	ut_params->cipher_xform.cipher.algo = cipher_algo->algo;
-	ut_params->cipher_xform.cipher.key.data = global_key;
-	ut_params->cipher_xform.cipher.key.length = cipher_algo->key_len;
-	ut_params->cipher_xform.cipher.op = RTE_CRYPTO_CIPHER_OP_DECRYPT;
-	ut_params->cipher_xform.cipher.iv.offset = IV_OFFSET;
-	ut_params->cipher_xform.cipher.iv.length = cipher_algo->iv_len;
+	ut_params->auth_xform.type = RTE_CRYPTO_SYM_XFORM_AUTH;
+	ut_params->auth_xform.auth.algo = auth_algo->algo;
 
 	if (ut_params->ipsec_xform.direction ==
 			RTE_SECURITY_IPSEC_SA_DIR_INGRESS) {
-		ut_params->crypto_xforms = &ut_params->auth_xform;
-		ut_params->auth_xform.next = &ut_params->cipher_xform;
+		ut_params->cipher_xform.cipher.op =
+			RTE_CRYPTO_CIPHER_OP_DECRYPT;
+		ut_params->auth_xform.auth.op = RTE_CRYPTO_AUTH_OP_VERIFY;
 		ut_params->cipher_xform.next = NULL;
+		ut_params->auth_xform.next = &ut_params->cipher_xform;
+		ut_params->crypto_xforms = &ut_params->auth_xform;
 	} else {
-		ut_params->crypto_xforms = &ut_params->cipher_xform;
-		ut_params->cipher_xform.next = &ut_params->auth_xform;
+		ut_params->cipher_xform.cipher.op =
+			RTE_CRYPTO_CIPHER_OP_ENCRYPT;
+		ut_params->auth_xform.auth.op = RTE_CRYPTO_AUTH_OP_GENERATE;
 		ut_params->auth_xform.next = NULL;
+		ut_params->cipher_xform.next = &ut_params->auth_xform;
+		ut_params->crypto_xforms = &ut_params->cipher_xform;
 	}
 }
 
 static int
-check_cryptodev_capablity(const struct ipsec_unitest_params *ut,
+check_cryptodev_capability(const struct ipsec_unitest_params *ut,
 		uint8_t dev_id)
 {
 	struct rte_cryptodev_sym_capability_idx cap_idx;
@@ -287,9 +281,12 @@ testsuite_setup(void)
 	int rc;
 
 	memset(ts_params, 0, sizeof(*ts_params));
+	memset(ut_params, 0, sizeof(*ut_params));
+	memset(&uparams, 0, sizeof(struct user_params));
 
 	uparams.auth = RTE_CRYPTO_SYM_XFORM_AUTH;
 	uparams.cipher = RTE_CRYPTO_SYM_XFORM_CIPHER;
+	uparams.aead = RTE_CRYPTO_SYM_XFORM_NOT_SPECIFIED;
 	strcpy(uparams.auth_algo, "null");
 	strcpy(uparams.cipher_algo, "null");
 
@@ -299,13 +296,13 @@ testsuite_setup(void)
 
 	nb_devs = rte_cryptodev_count();
 	if (nb_devs < 1) {
-		RTE_LOG(ERR, USER1, "No crypto devices found?\n");
-		return TEST_FAILED;
+		RTE_LOG(WARNING, USER1, "No crypto devices found?\n");
+		return TEST_SKIPPED;
 	}
 
 	/* Find first valid crypto device */
 	for (i = 0; i < nb_devs; i++) {
-		rc = check_cryptodev_capablity(ut_params, i);
+		rc = check_cryptodev_capability(ut_params, i);
 		if (rc == 0) {
 			ts_params->valid_dev = i;
 			ts_params->valid_dev_found = 1;
@@ -345,6 +342,7 @@ testsuite_setup(void)
 
 	ts_params->conf.nb_queue_pairs = info.max_nb_queue_pairs;
 	ts_params->conf.socket_id = SOCKET_ID_ANY;
+	ts_params->conf.ff_disable = RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO;
 
 	sess_sz = rte_cryptodev_sym_get_private_session_size(dev_id);
 	sess_sz = RTE_MAX(sess_sz, sizeof(struct rte_security_session));
@@ -454,8 +452,10 @@ ut_teardown(void)
 
 	for (i = 0; i < BURST_SIZE; i++) {
 		/* free crypto operation structure */
-		if (ut_params->cop[i])
+		if (ut_params->cop[i]) {
 			rte_crypto_op_free(ut_params->cop[i]);
+			ut_params->cop[i] = NULL;
+		}
 
 		/*
 		 * free mbuf - both obuf and ibuf are usually the same,
@@ -465,17 +465,17 @@ ut_teardown(void)
 		if (ut_params->obuf[i]) {
 			rte_pktmbuf_free(ut_params->obuf[i]);
 			if (ut_params->ibuf[i] == ut_params->obuf[i])
-				ut_params->ibuf[i] = 0;
-			ut_params->obuf[i] = 0;
+				ut_params->ibuf[i] = NULL;
+			ut_params->obuf[i] = NULL;
 		}
 		if (ut_params->ibuf[i]) {
 			rte_pktmbuf_free(ut_params->ibuf[i]);
-			ut_params->ibuf[i] = 0;
+			ut_params->ibuf[i] = NULL;
 		}
 
 		if (ut_params->testbuf[i]) {
 			rte_pktmbuf_free(ut_params->testbuf[i]);
-			ut_params->testbuf[i] = 0;
+			ut_params->testbuf[i] = NULL;
 		}
 	}
 
@@ -534,13 +534,13 @@ const char null_encrypted_data[] =
 	"Network Security People Have A Strange Sense Of Humor unlike Other "
 	"People who have a normal sense of humour";
 
-struct ipv4_hdr ipv4_outer  = {
+struct rte_ipv4_hdr ipv4_outer  = {
 	.version_ihl = IPVERSION << 4 |
-		sizeof(ipv4_outer) / IPV4_IHL_MULTIPLIER,
+		sizeof(ipv4_outer) / RTE_IPV4_IHL_MULTIPLIER,
 	.time_to_live = IPDEFTTL,
 	.next_proto_id = IPPROTO_ESP,
-	.src_addr = IPv4(192, 168, 1, 100),
-	.dst_addr = IPv4(192, 168, 2, 100),
+	.src_addr = RTE_IPV4(192, 168, 1, 100),
+	.dst_addr = RTE_IPV4(192, 168, 2, 100),
 };
 
 static struct rte_mbuf *
@@ -572,12 +572,13 @@ setup_test_string_tunneled(struct rte_mempool *mpool, const char *string,
 	size_t len, uint32_t spi, uint32_t seq)
 {
 	struct rte_mbuf *m = rte_pktmbuf_alloc(mpool);
-	uint32_t hdrlen = sizeof(struct ipv4_hdr) + sizeof(struct esp_hdr);
-	uint32_t taillen = sizeof(struct esp_tail);
+	uint32_t hdrlen = sizeof(struct rte_ipv4_hdr) +
+		sizeof(struct rte_esp_hdr);
+	uint32_t taillen = sizeof(struct rte_esp_tail);
 	uint32_t t_len = len + hdrlen + taillen;
 	uint32_t padlen;
 
-	struct esp_hdr esph  = {
+	struct rte_esp_hdr esph  = {
 		.spi = rte_cpu_to_be_32(spi),
 		.seq = rte_cpu_to_be_32(seq)
 	};
@@ -585,7 +586,7 @@ setup_test_string_tunneled(struct rte_mempool *mpool, const char *string,
 	padlen = RTE_ALIGN(t_len, 4) - t_len;
 	t_len += padlen;
 
-	struct esp_tail espt  = {
+	struct rte_esp_tail espt = {
 		.pad_len = padlen,
 		.next_proto = IPPROTO_IPIP,
 	};
@@ -688,11 +689,11 @@ fill_ipsec_param(uint32_t replay_win_sz, uint64_t flags)
 
 	prm->userdata = 1;
 	prm->flags = flags;
-	prm->replay_win_sz = replay_win_sz;
 
 	/* setup ipsec xform */
 	prm->ipsec_xform = ut_params->ipsec_xform;
 	prm->ipsec_xform.salt = (uint32_t)rte_rand();
+	prm->ipsec_xform.replay_win_sz = replay_win_sz;
 
 	/* setup tunnel related fields */
 	prm->tun.hdr_len = sizeof(ipv4_outer);
@@ -753,6 +754,29 @@ create_sa(enum rte_security_session_action_type action_type,
 }
 
 static int
+crypto_dequeue_burst(uint16_t num_pkts)
+{
+	struct ipsec_testsuite_params *ts_params = &testsuite_params;
+	struct ipsec_unitest_params *ut_params = &unittest_params;
+	uint32_t pkt_cnt, k;
+	int i;
+
+	for (i = 0, pkt_cnt = 0;
+		i < DEQUEUE_COUNT && pkt_cnt != num_pkts; i++) {
+		k = rte_cryptodev_dequeue_burst(ts_params->valid_dev, 0,
+			&ut_params->cop[pkt_cnt], num_pkts - pkt_cnt);
+		pkt_cnt += k;
+		rte_delay_us(1);
+	}
+
+	if (pkt_cnt != num_pkts) {
+		RTE_LOG(ERR, USER1, "rte_cryptodev_dequeue_burst fail\n");
+		return TEST_FAILED;
+	}
+	return TEST_SUCCESS;
+}
+
+static int
 crypto_ipsec(uint16_t num_pkts)
 {
 	struct ipsec_testsuite_params *ts_params = &testsuite_params;
@@ -767,6 +791,7 @@ crypto_ipsec(uint16_t num_pkts)
 		RTE_LOG(ERR, USER1, "rte_ipsec_pkt_crypto_prepare fail\n");
 		return TEST_FAILED;
 	}
+
 	k = rte_cryptodev_enqueue_burst(ts_params->valid_dev, 0,
 		ut_params->cop, num_pkts);
 	if (k != num_pkts) {
@@ -774,12 +799,8 @@ crypto_ipsec(uint16_t num_pkts)
 		return TEST_FAILED;
 	}
 
-	k = rte_cryptodev_dequeue_burst(ts_params->valid_dev, 0,
-		ut_params->cop, num_pkts);
-	if (k != num_pkts) {
-		RTE_LOG(ERR, USER1, "rte_cryptodev_dequeue_burst fail\n");
+	if (crypto_dequeue_burst(num_pkts) == TEST_FAILED)
 		return TEST_FAILED;
-	}
 
 	ng = rte_ipsec_pkt_crypto_group(
 		(const struct rte_crypto_op **)(uintptr_t)ut_params->cop,
@@ -862,13 +883,25 @@ lksd_proto_ipsec(uint16_t num_pkts)
 	return TEST_SUCCESS;
 }
 
+static void
+dump_grp_pkt(uint32_t i, struct rte_ipsec_group *grp, uint32_t k)
+{
+	RTE_LOG(ERR, USER1,
+		"After rte_ipsec_pkt_process grp[%d].cnt=%d k=%d fail\n",
+		i, grp[i].cnt, k);
+	RTE_LOG(ERR, USER1,
+		"After rte_ipsec_pkt_process grp[%d].m=%p grp[%d].m[%d]=%p\n",
+		i, grp[i].m, i, k, grp[i].m[k]);
+
+	rte_pktmbuf_dump(stdout, grp[i].m[k], grp[i].m[k]->data_len);
+}
+
 static int
 crypto_ipsec_2sa(void)
 {
 	struct ipsec_testsuite_params *ts_params = &testsuite_params;
 	struct ipsec_unitest_params *ut_params = &unittest_params;
 	struct rte_ipsec_group grp[BURST_SIZE];
-
 	uint32_t k, ng, i, r;
 
 	for (i = 0; i < BURST_SIZE; i++) {
@@ -890,19 +923,15 @@ crypto_ipsec_2sa(void)
 		}
 	}
 
-	k = rte_cryptodev_dequeue_burst(ts_params->valid_dev, 0,
-		ut_params->cop, BURST_SIZE);
-	if (k != BURST_SIZE) {
-		RTE_LOG(ERR, USER1, "rte_cryptodev_dequeue_burst fail\n");
+	if (crypto_dequeue_burst(BURST_SIZE) == TEST_FAILED)
 		return TEST_FAILED;
-	}
 
 	ng = rte_ipsec_pkt_crypto_group(
 		(const struct rte_crypto_op **)(uintptr_t)ut_params->cop,
 		ut_params->obuf, grp, BURST_SIZE);
 	if (ng != BURST_SIZE) {
 		RTE_LOG(ERR, USER1, "rte_ipsec_pkt_crypto_group fail ng=%d\n",
-				ng);
+			ng);
 		return TEST_FAILED;
 	}
 
@@ -910,7 +939,7 @@ crypto_ipsec_2sa(void)
 	for (i = 0; i < ng; i++) {
 		k = rte_ipsec_pkt_process(grp[i].id.ptr, grp[i].m, grp[i].cnt);
 		if (k != grp[i].cnt) {
-			RTE_LOG(ERR, USER1, "rte_ipsec_pkt_process fail\n");
+			dump_grp_pkt(i, grp, k);
 			return TEST_FAILED;
 		}
 	}
@@ -1029,12 +1058,8 @@ crypto_ipsec_2sa_4grp(void)
 		}
 	}
 
-	k = rte_cryptodev_dequeue_burst(ts_params->valid_dev, 0,
-		ut_params->cop, BURST_SIZE);
-	if (k != BURST_SIZE) {
-		RTE_LOG(ERR, USER1, "rte_cryptodev_dequeue_burst fail\n");
+	if (crypto_dequeue_burst(BURST_SIZE) == TEST_FAILED)
 		return TEST_FAILED;
-	}
 
 	ng = rte_ipsec_pkt_crypto_group(
 		(const struct rte_crypto_op **)(uintptr_t)ut_params->cop,
@@ -1049,7 +1074,7 @@ crypto_ipsec_2sa_4grp(void)
 	for (i = 0; i < ng; i++) {
 		k = rte_ipsec_pkt_process(grp[i].id.ptr, grp[i].m, grp[i].cnt);
 		if (k != grp[i].cnt) {
-			RTE_LOG(ERR, USER1, "rte_ipsec_pkt_process fail\n");
+			dump_grp_pkt(i, grp, k);
 			return TEST_FAILED;
 		}
 		rc = crypto_ipsec_4grp_check_cnt(i, grp);
@@ -1143,14 +1168,43 @@ test_ipsec_dump_buffers(struct ipsec_unitest_params *ut_params, int i)
 }
 
 static void
+destroy_dummy_sec_session(struct ipsec_unitest_params *ut,
+	uint32_t j)
+{
+	rte_security_session_destroy(&dummy_sec_ctx,
+					ut->ss[j].security.ses);
+	ut->ss[j].security.ctx = NULL;
+}
+
+static void
+destroy_crypto_session(struct ipsec_unitest_params *ut,
+	uint8_t crypto_dev, uint32_t j)
+{
+	rte_cryptodev_sym_session_clear(crypto_dev, ut->ss[j].crypto.ses);
+	rte_cryptodev_sym_session_free(ut->ss[j].crypto.ses);
+	memset(&ut->ss[j], 0, sizeof(ut->ss[j]));
+}
+
+static void
+destroy_session(struct ipsec_unitest_params *ut,
+	uint8_t crypto_dev, uint32_t j)
+{
+	if (ut->ss[j].type == RTE_SECURITY_ACTION_TYPE_NONE)
+		return destroy_crypto_session(ut, crypto_dev, j);
+	else
+		return destroy_dummy_sec_session(ut, j);
+}
+
+static void
 destroy_sa(uint32_t j)
 {
 	struct ipsec_unitest_params *ut = &unittest_params;
+	struct ipsec_testsuite_params *ts = &testsuite_params;
 
 	rte_ipsec_sa_fini(ut->ss[j].sa);
 	rte_free(ut->ss[j].sa);
-	rte_cryptodev_sym_session_free(ut->ss[j].crypto.ses);
-	memset(&ut->ss[j], 0, sizeof(ut->ss[j]));
+
+	destroy_session(ut, ts->valid_dev, j);
 }
 
 static int
@@ -1191,8 +1245,7 @@ test_ipsec_crypto_inb_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1294,8 +1347,7 @@ test_ipsec_crypto_outb_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1404,8 +1456,7 @@ test_ipsec_inline_crypto_inb_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1483,8 +1534,7 @@ test_ipsec_inline_proto_inb_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1592,8 +1642,7 @@ test_ipsec_inline_crypto_outb_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1671,8 +1720,7 @@ test_ipsec_inline_proto_outb_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1748,8 +1796,7 @@ test_ipsec_lksd_proto_inb_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1862,8 +1909,7 @@ test_ipsec_replay_inb_inside_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -1956,8 +2002,7 @@ test_ipsec_replay_inb_outside_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -2057,7 +2102,7 @@ test_ipsec_replay_inb_repeat_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n", i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -2158,8 +2203,7 @@ test_ipsec_replay_inb_inside_burst_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -2292,8 +2336,7 @@ test_ipsec_crypto_inb_burst_2sa_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa 0 failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -2302,8 +2345,7 @@ test_ipsec_crypto_inb_burst_2sa_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 1);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa 1 failed, cfg %d\n", i);
 		destroy_sa(0);
 		return TEST_FAILED;
 	}
@@ -2380,8 +2422,7 @@ test_ipsec_crypto_inb_burst_2sa_4grp_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 0);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa 0 failed, cfg %d\n", i);
 		return TEST_FAILED;
 	}
 
@@ -2390,8 +2431,7 @@ test_ipsec_crypto_inb_burst_2sa_4grp_null_null(int i)
 	rc = create_sa(RTE_SECURITY_ACTION_TYPE_NONE,
 			test_cfg[i].replay_win_sz, test_cfg[i].flags, 1);
 	if (rc != 0) {
-		RTE_LOG(ERR, USER1, "rte_ipsec_sa_init failed, cfg %d\n",
-			i);
+		RTE_LOG(ERR, USER1, "create_sa 1 failed, cfg %d\n", i);
 		destroy_sa(0);
 		return TEST_FAILED;
 	}

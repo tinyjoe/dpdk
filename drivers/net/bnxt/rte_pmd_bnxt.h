@@ -6,7 +6,8 @@
 #ifndef _PMD_BNXT_H_
 #define _PMD_BNXT_H_
 
-#include <rte_ethdev_driver.h>
+#include <rte_ethdev.h>
+#include <rte_ether.h>
 
 /*
  * Response sent back to the caller after callback
@@ -67,7 +68,7 @@ int rte_pmd_bnxt_set_vf_mac_anti_spoof(uint16_t port, uint16_t vf, uint8_t on);
  *   - (-EINVAL) if *vf* or *mac_addr* is invalid.
  */
 int rte_pmd_bnxt_set_vf_mac_addr(uint16_t port, uint16_t vf,
-		struct ether_addr *mac_addr);
+		struct rte_ether_addr *mac_addr);
 
 /**
  * Enable/Disable vf vlan strip for all queues in a pool
@@ -303,7 +304,7 @@ int rte_pmd_bnxt_get_vf_tx_drop_count(uint16_t port, uint16_t vf_id,
  *   - (-ENOTSUP) Ethernet device is not a PF
  *   - (-ENOMEM) on an allocation failure
  */
-int rte_pmd_bnxt_mac_addr_add(uint16_t port, struct ether_addr *mac_addr,
+int rte_pmd_bnxt_mac_addr_add(uint16_t port, struct rte_ether_addr *mac_addr,
 				uint32_t vf_id);
 
 /**

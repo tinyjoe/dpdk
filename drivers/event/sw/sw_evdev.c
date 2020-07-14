@@ -38,12 +38,12 @@ sw_port_link(struct rte_eventdev *dev, void *port, const uint8_t queues[],
 
 		/* check for qid map overflow */
 		if (q->cq_num_mapped_cqs >= RTE_DIM(q->cq_map)) {
-			rte_errno = -EDQUOT;
+			rte_errno = EDQUOT;
 			break;
 		}
 
 		if (p->is_directed && p->num_qids_mapped > 0) {
-			rte_errno = -EDQUOT;
+			rte_errno = EDQUOT;
 			break;
 		}
 
@@ -59,12 +59,12 @@ sw_port_link(struct rte_eventdev *dev, void *port, const uint8_t queues[],
 		if (q->type == SW_SCHED_TYPE_DIRECT) {
 			/* check directed qids only map to one port */
 			if (p->num_qids_mapped > 0) {
-				rte_errno = -EDQUOT;
+				rte_errno = EDQUOT;
 				break;
 			}
 			/* check port only takes a directed flow */
 			if (num > 1) {
-				rte_errno = -EDQUOT;
+				rte_errno = EDQUOT;
 				break;
 			}
 
@@ -1083,13 +1083,4 @@ static struct rte_vdev_driver evdev_sw_pmd_drv = {
 RTE_PMD_REGISTER_VDEV(EVENTDEV_NAME_SW_PMD, evdev_sw_pmd_drv);
 RTE_PMD_REGISTER_PARAM_STRING(event_sw, NUMA_NODE_ARG "=<int> "
 		SCHED_QUANTA_ARG "=<int>" CREDIT_QUANTA_ARG "=<int>");
-
-/* declared extern in header, for access from other .c files */
-int eventdev_sw_log_level;
-
-RTE_INIT(evdev_sw_init_log)
-{
-	eventdev_sw_log_level = rte_log_register("pmd.event.sw");
-	if (eventdev_sw_log_level >= 0)
-		rte_log_set_level(eventdev_sw_log_level, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(eventdev_sw_log_level, pmd.event.sw, NOTICE);

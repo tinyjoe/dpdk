@@ -156,9 +156,9 @@ extern "C" {
 #include <rte_errno.h>
 #include <rte_common.h>
 #include <rte_config.h>
+#include <rte_ether.h>
 
-#include "rte_ether.h"
-#include "rte_eth_ctrl.h"
+#include "rte_ethdev_trace_fp.h"
 #include "rte_dev_info.h"
 
 extern int rte_eth_dev_logtype;
@@ -284,6 +284,7 @@ struct rte_eth_stats {
 #define ETH_LINK_SPEED_50G      (1 << 12)  /**<  50 Gbps */
 #define ETH_LINK_SPEED_56G      (1 << 13)  /**<  56 Gbps */
 #define ETH_LINK_SPEED_100G     (1 << 14)  /**< 100 Gbps */
+#define ETH_LINK_SPEED_200G     (1 << 15)  /**< 200 Gbps */
 
 /**
  * Ethernet numeric link speeds in Mbps
@@ -301,6 +302,7 @@ struct rte_eth_stats {
 #define ETH_SPEED_NUM_50G      50000 /**<  50 Gbps */
 #define ETH_SPEED_NUM_56G      56000 /**<  56 Gbps */
 #define ETH_SPEED_NUM_100G    100000 /**< 100 Gbps */
+#define ETH_SPEED_NUM_200G    200000 /**< 200 Gbps */
 
 /**
  * A structure used to retrieve link-level information of an Ethernet port.
@@ -311,7 +313,7 @@ struct rte_eth_link {
 	uint16_t link_duplex  : 1;  /**< ETH_LINK_[HALF/FULL]_DUPLEX */
 	uint16_t link_autoneg : 1;  /**< ETH_LINK_[AUTONEG/FIXED] */
 	uint16_t link_status  : 1;  /**< ETH_LINK_[DOWN/UP] */
-} __attribute__((aligned(8)));      /**< aligned for atomic64 read/write */
+} __rte_aligned(8);      /**< aligned for atomic64 read/write */
 
 /* Utility constants */
 #define ETH_LINK_HALF_DUPLEX 0 /**< Half-duplex connection (see link_duplex). */
@@ -396,6 +398,8 @@ struct rte_eth_rxmode {
 	/** The multi-queue packet distribution mode to be used, e.g. RSS. */
 	enum rte_eth_rx_mq_mode mq_mode;
 	uint32_t max_rx_pkt_len;  /**< Only used if JUMBO_FRAME enabled. */
+	/** Maximum allowed size of LRO aggregated packet. */
+	uint32_t max_lro_pkt_size;
 	uint16_t split_hdr_size;  /**< hdr buf size (header_split enabled).*/
 	/**
 	 * Per-port Rx offloads to be set using DEV_RX_OFFLOAD_* flags.
@@ -403,6 +407,9 @@ struct rte_eth_rxmode {
 	 * structure are allowed to be set.
 	 */
 	uint64_t offloads;
+
+	uint64_t reserved_64s[2]; /**< Reserved for future fields */
+	void *reserved_ptrs[2];   /**< Reserved for future fields */
 };
 
 /**
@@ -448,31 +455,220 @@ struct rte_eth_rss_conf {
 };
 
 /*
- * The RSS offload types are defined based on flow types which are defined
- * in rte_eth_ctrl.h. Different NIC hardwares may support different RSS offload
- * types. The supported flow types or RSS offload types can be queried by
- * rte_eth_dev_info_get().
+ * A packet can be identified by hardware as different flow types. Different
+ * NIC hardware may support different flow types.
+ * Basically, the NIC hardware identifies the flow type as deep protocol as
+ * possible, and exclusively. For example, if a packet is identified as
+ * 'RTE_ETH_FLOW_NONFRAG_IPV4_TCP', it will not be any of other flow types,
+ * though it is an actual IPV4 packet.
  */
-#define ETH_RSS_IPV4               (1ULL << RTE_ETH_FLOW_IPV4)
-#define ETH_RSS_FRAG_IPV4          (1ULL << RTE_ETH_FLOW_FRAG_IPV4)
-#define ETH_RSS_NONFRAG_IPV4_TCP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_TCP)
-#define ETH_RSS_NONFRAG_IPV4_UDP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_UDP)
-#define ETH_RSS_NONFRAG_IPV4_SCTP  (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_SCTP)
-#define ETH_RSS_NONFRAG_IPV4_OTHER (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_OTHER)
-#define ETH_RSS_IPV6               (1ULL << RTE_ETH_FLOW_IPV6)
-#define ETH_RSS_FRAG_IPV6          (1ULL << RTE_ETH_FLOW_FRAG_IPV6)
-#define ETH_RSS_NONFRAG_IPV6_TCP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_TCP)
-#define ETH_RSS_NONFRAG_IPV6_UDP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_UDP)
-#define ETH_RSS_NONFRAG_IPV6_SCTP  (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_SCTP)
-#define ETH_RSS_NONFRAG_IPV6_OTHER (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_OTHER)
-#define ETH_RSS_L2_PAYLOAD         (1ULL << RTE_ETH_FLOW_L2_PAYLOAD)
-#define ETH_RSS_IPV6_EX            (1ULL << RTE_ETH_FLOW_IPV6_EX)
-#define ETH_RSS_IPV6_TCP_EX        (1ULL << RTE_ETH_FLOW_IPV6_TCP_EX)
-#define ETH_RSS_IPV6_UDP_EX        (1ULL << RTE_ETH_FLOW_IPV6_UDP_EX)
-#define ETH_RSS_PORT               (1ULL << RTE_ETH_FLOW_PORT)
-#define ETH_RSS_VXLAN              (1ULL << RTE_ETH_FLOW_VXLAN)
-#define ETH_RSS_GENEVE             (1ULL << RTE_ETH_FLOW_GENEVE)
-#define ETH_RSS_NVGRE              (1ULL << RTE_ETH_FLOW_NVGRE)
+#define RTE_ETH_FLOW_UNKNOWN             0
+#define RTE_ETH_FLOW_RAW                 1
+#define RTE_ETH_FLOW_IPV4                2
+#define RTE_ETH_FLOW_FRAG_IPV4           3
+#define RTE_ETH_FLOW_NONFRAG_IPV4_TCP    4
+#define RTE_ETH_FLOW_NONFRAG_IPV4_UDP    5
+#define RTE_ETH_FLOW_NONFRAG_IPV4_SCTP   6
+#define RTE_ETH_FLOW_NONFRAG_IPV4_OTHER  7
+#define RTE_ETH_FLOW_IPV6                8
+#define RTE_ETH_FLOW_FRAG_IPV6           9
+#define RTE_ETH_FLOW_NONFRAG_IPV6_TCP   10
+#define RTE_ETH_FLOW_NONFRAG_IPV6_UDP   11
+#define RTE_ETH_FLOW_NONFRAG_IPV6_SCTP  12
+#define RTE_ETH_FLOW_NONFRAG_IPV6_OTHER 13
+#define RTE_ETH_FLOW_L2_PAYLOAD         14
+#define RTE_ETH_FLOW_IPV6_EX            15
+#define RTE_ETH_FLOW_IPV6_TCP_EX        16
+#define RTE_ETH_FLOW_IPV6_UDP_EX        17
+#define RTE_ETH_FLOW_PORT               18
+	/**< Consider device port number as a flow differentiator */
+#define RTE_ETH_FLOW_VXLAN              19 /**< VXLAN protocol based flow */
+#define RTE_ETH_FLOW_GENEVE             20 /**< GENEVE protocol based flow */
+#define RTE_ETH_FLOW_NVGRE              21 /**< NVGRE protocol based flow */
+#define RTE_ETH_FLOW_VXLAN_GPE          22 /**< VXLAN-GPE protocol based flow */
+#define RTE_ETH_FLOW_GTPU               23 /**< GTPU protocol based flow */
+#define RTE_ETH_FLOW_MAX                24
+
+/*
+ * Below macros are defined for RSS offload types, they can be used to
+ * fill rte_eth_rss_conf.rss_hf or rte_flow_action_rss.types.
+ */
+#define ETH_RSS_IPV4               (1ULL << 2)
+#define ETH_RSS_FRAG_IPV4          (1ULL << 3)
+#define ETH_RSS_NONFRAG_IPV4_TCP   (1ULL << 4)
+#define ETH_RSS_NONFRAG_IPV4_UDP   (1ULL << 5)
+#define ETH_RSS_NONFRAG_IPV4_SCTP  (1ULL << 6)
+#define ETH_RSS_NONFRAG_IPV4_OTHER (1ULL << 7)
+#define ETH_RSS_IPV6               (1ULL << 8)
+#define ETH_RSS_FRAG_IPV6          (1ULL << 9)
+#define ETH_RSS_NONFRAG_IPV6_TCP   (1ULL << 10)
+#define ETH_RSS_NONFRAG_IPV6_UDP   (1ULL << 11)
+#define ETH_RSS_NONFRAG_IPV6_SCTP  (1ULL << 12)
+#define ETH_RSS_NONFRAG_IPV6_OTHER (1ULL << 13)
+#define ETH_RSS_L2_PAYLOAD         (1ULL << 14)
+#define ETH_RSS_IPV6_EX            (1ULL << 15)
+#define ETH_RSS_IPV6_TCP_EX        (1ULL << 16)
+#define ETH_RSS_IPV6_UDP_EX        (1ULL << 17)
+#define ETH_RSS_PORT               (1ULL << 18)
+#define ETH_RSS_VXLAN              (1ULL << 19)
+#define ETH_RSS_GENEVE             (1ULL << 20)
+#define ETH_RSS_NVGRE              (1ULL << 21)
+#define ETH_RSS_GTPU               (1ULL << 23)
+#define ETH_RSS_ETH                (1ULL << 24)
+#define ETH_RSS_S_VLAN             (1ULL << 25)
+#define ETH_RSS_C_VLAN             (1ULL << 26)
+#define ETH_RSS_ESP                (1ULL << 27)
+#define ETH_RSS_AH                 (1ULL << 28)
+#define ETH_RSS_L2TPV3             (1ULL << 29)
+#define ETH_RSS_PFCP               (1ULL << 30)
+#define ETH_RSS_PPPOE		   (1ULL << 31)
+
+/*
+ * We use the following macros to combine with above ETH_RSS_* for
+ * more specific input set selection. These bits are defined starting
+ * from the high end of the 64 bits.
+ * Note: If we use above ETH_RSS_* without SRC/DST_ONLY, it represents
+ * both SRC and DST are taken into account. If SRC_ONLY and DST_ONLY of
+ * the same level are used simultaneously, it is the same case as none of
+ * them are added.
+ */
+#define ETH_RSS_L3_SRC_ONLY        (1ULL << 63)
+#define ETH_RSS_L3_DST_ONLY        (1ULL << 62)
+#define ETH_RSS_L4_SRC_ONLY        (1ULL << 61)
+#define ETH_RSS_L4_DST_ONLY        (1ULL << 60)
+#define ETH_RSS_L2_SRC_ONLY        (1ULL << 59)
+#define ETH_RSS_L2_DST_ONLY        (1ULL << 58)
+
+/*
+ * Only select IPV6 address prefix as RSS input set according to
+ * https://tools.ietf.org/html/rfc6052
+ * Must be combined with ETH_RSS_IPV6, ETH_RSS_NONFRAG_IPV6_UDP,
+ * ETH_RSS_NONFRAG_IPV6_TCP, ETH_RSS_NONFRAG_IPV6_SCTP.
+ */
+#define RTE_ETH_RSS_L3_PRE32	   (1ULL << 57)
+#define RTE_ETH_RSS_L3_PRE40	   (1ULL << 56)
+#define RTE_ETH_RSS_L3_PRE48	   (1ULL << 55)
+#define RTE_ETH_RSS_L3_PRE56	   (1ULL << 54)
+#define RTE_ETH_RSS_L3_PRE64	   (1ULL << 53)
+#define RTE_ETH_RSS_L3_PRE96	   (1ULL << 52)
+
+/**
+ * For input set change of hash filter, if SRC_ONLY and DST_ONLY of
+ * the same level are used simultaneously, it is the same case as
+ * none of them are added.
+ *
+ * @param rss_hf
+ *   RSS types with SRC/DST_ONLY.
+ * @return
+ *   RSS types.
+ */
+static inline uint64_t
+rte_eth_rss_hf_refine(uint64_t rss_hf)
+{
+	if ((rss_hf & ETH_RSS_L3_SRC_ONLY) && (rss_hf & ETH_RSS_L3_DST_ONLY))
+		rss_hf &= ~(ETH_RSS_L3_SRC_ONLY | ETH_RSS_L3_DST_ONLY);
+
+	if ((rss_hf & ETH_RSS_L4_SRC_ONLY) && (rss_hf & ETH_RSS_L4_DST_ONLY))
+		rss_hf &= ~(ETH_RSS_L4_SRC_ONLY | ETH_RSS_L4_DST_ONLY);
+
+	return rss_hf;
+}
+
+#define ETH_RSS_IPV6_PRE32 ( \
+		ETH_RSS_IPV6 | \
+		RTE_ETH_RSS_L3_PRE32)
+
+#define ETH_RSS_IPV6_PRE40 ( \
+		ETH_RSS_IPV6 | \
+		RTE_ETH_RSS_L3_PRE40)
+
+#define ETH_RSS_IPV6_PRE48 ( \
+		ETH_RSS_IPV6 | \
+		RTE_ETH_RSS_L3_PRE48)
+
+#define ETH_RSS_IPV6_PRE56 ( \
+		ETH_RSS_IPV6 | \
+		RTE_ETH_RSS_L3_PRE56)
+
+#define ETH_RSS_IPV6_PRE64 ( \
+		ETH_RSS_IPV6 | \
+		RTE_ETH_RSS_L3_PRE64)
+
+#define ETH_RSS_IPV6_PRE96 ( \
+		ETH_RSS_IPV6 | \
+		RTE_ETH_RSS_L3_PRE96)
+
+#define ETH_RSS_IPV6_PRE32_UDP ( \
+		ETH_RSS_NONFRAG_IPV6_UDP | \
+		RTE_ETH_RSS_L3_PRE32)
+
+#define ETH_RSS_IPV6_PRE40_UDP ( \
+		ETH_RSS_NONFRAG_IPV6_UDP | \
+		RTE_ETH_RSS_L3_PRE40)
+
+#define ETH_RSS_IPV6_PRE48_UDP ( \
+		ETH_RSS_NONFRAG_IPV6_UDP | \
+		RTE_ETH_RSS_L3_PRE48)
+
+#define ETH_RSS_IPV6_PRE56_UDP ( \
+		ETH_RSS_NONFRAG_IPV6_UDP | \
+		RTE_ETH_RSS_L3_PRE56)
+
+#define ETH_RSS_IPV6_PRE64_UDP ( \
+		ETH_RSS_NONFRAG_IPV6_UDP | \
+		RTE_ETH_RSS_L3_PRE64)
+
+#define ETH_RSS_IPV6_PRE96_UDP ( \
+		ETH_RSS_NONFRAG_IPV6_UDP | \
+		RTE_ETH_RSS_L3_PRE96)
+
+#define ETH_RSS_IPV6_PRE32_TCP ( \
+		ETH_RSS_NONFRAG_IPV6_TCP | \
+		RTE_ETH_RSS_L3_PRE32)
+
+#define ETH_RSS_IPV6_PRE40_TCP ( \
+		ETH_RSS_NONFRAG_IPV6_TCP | \
+		RTE_ETH_RSS_L3_PRE40)
+
+#define ETH_RSS_IPV6_PRE48_TCP ( \
+		ETH_RSS_NONFRAG_IPV6_TCP | \
+		RTE_ETH_RSS_L3_PRE48)
+
+#define ETH_RSS_IPV6_PRE56_TCP ( \
+		ETH_RSS_NONFRAG_IPV6_TCP | \
+		RTE_ETH_RSS_L3_PRE56)
+
+#define ETH_RSS_IPV6_PRE64_TCP ( \
+		ETH_RSS_NONFRAG_IPV6_TCP | \
+		RTE_ETH_RSS_L3_PRE64)
+
+#define ETH_RSS_IPV6_PRE96_TCP ( \
+		ETH_RSS_NONFRAG_IPV6_TCP | \
+		RTE_ETH_RSS_L3_PRE96)
+
+#define ETH_RSS_IPV6_PRE32_SCTP ( \
+		ETH_RSS_NONFRAG_IPV6_SCTP | \
+		RTE_ETH_RSS_L3_PRE32)
+
+#define ETH_RSS_IPV6_PRE40_SCTP ( \
+		ETH_RSS_NONFRAG_IPV6_SCTP | \
+		RTE_ETH_RSS_L3_PRE40)
+
+#define ETH_RSS_IPV6_PRE48_SCTP ( \
+		ETH_RSS_NONFRAG_IPV6_SCTP | \
+		RTE_ETH_RSS_L3_PRE48)
+
+#define ETH_RSS_IPV6_PRE56_SCTP ( \
+		ETH_RSS_NONFRAG_IPV6_SCTP | \
+		RTE_ETH_RSS_L3_PRE56)
+
+#define ETH_RSS_IPV6_PRE64_SCTP ( \
+		ETH_RSS_NONFRAG_IPV6_SCTP | \
+		RTE_ETH_RSS_L3_PRE64)
+
+#define ETH_RSS_IPV6_PRE96_SCTP ( \
+		ETH_RSS_NONFRAG_IPV6_SCTP | \
+		RTE_ETH_RSS_L3_PRE96)
 
 #define ETH_RSS_IP ( \
 	ETH_RSS_IPV4 | \
@@ -501,6 +697,10 @@ struct rte_eth_rss_conf {
 	ETH_RSS_VXLAN  | \
 	ETH_RSS_GENEVE | \
 	ETH_RSS_NVGRE)
+
+#define ETH_RSS_VLAN ( \
+	ETH_RSS_S_VLAN  | \
+	ETH_RSS_C_VLAN)
 
 /**< Mask of valid RSS hash protocols */
 #define ETH_RSS_PROTO_MASK ( \
@@ -550,11 +750,13 @@ struct rte_eth_rss_conf {
 #define ETH_VLAN_STRIP_OFFLOAD   0x0001 /**< VLAN Strip  On/Off */
 #define ETH_VLAN_FILTER_OFFLOAD  0x0002 /**< VLAN Filter On/Off */
 #define ETH_VLAN_EXTEND_OFFLOAD  0x0004 /**< VLAN Extend On/Off */
+#define ETH_QINQ_STRIP_OFFLOAD   0x0008 /**< QINQ Strip On/Off */
 
 /* Definitions used for mask VLAN setting */
 #define ETH_VLAN_STRIP_MASK   0x0001 /**< VLAN Strip  setting mask */
 #define ETH_VLAN_FILTER_MASK  0x0002 /**< VLAN Filter  setting mask*/
 #define ETH_VLAN_EXTEND_MASK  0x0004 /**< VLAN Extend  setting mask*/
+#define ETH_QINQ_STRIP_MASK   0x0008 /**< QINQ Strip  setting mask */
 #define ETH_VLAN_ID_MAX       0x0FFF /**< VLAN ID is in lower 12 bits*/
 
 /* Definitions used for receive MAC address   */
@@ -731,6 +933,9 @@ struct rte_eth_txmode {
 		/**< If set, reject sending out untagged pkts */
 		hw_vlan_insert_pvid : 1;
 		/**< If set, enable port based VLAN insertion */
+
+	uint64_t reserved_64s[2]; /**< Reserved for future fields */
+	void *reserved_ptrs[2];   /**< Reserved for future fields */
 };
 
 /**
@@ -747,6 +952,9 @@ struct rte_eth_rxconf {
 	 * fields on rte_eth_dev_info structure are allowed to be set.
 	 */
 	uint64_t offloads;
+
+	uint64_t reserved_64s[2]; /**< Reserved for future fields */
+	void *reserved_ptrs[2];   /**< Reserved for future fields */
 };
 
 /**
@@ -765,6 +973,49 @@ struct rte_eth_txconf {
 	 * fields on rte_eth_dev_info structure are allowed to be set.
 	 */
 	uint64_t offloads;
+
+	uint64_t reserved_64s[2]; /**< Reserved for future fields */
+	void *reserved_ptrs[2];   /**< Reserved for future fields */
+};
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * A structure used to return the hairpin capabilities that are supported.
+ */
+struct rte_eth_hairpin_cap {
+	/** The max number of hairpin queues (different bindings). */
+	uint16_t max_nb_queues;
+	/** Max number of Rx queues to be connected to one Tx queue. */
+	uint16_t max_rx_2_tx;
+	/** Max number of Tx queues to be connected to one Rx queue. */
+	uint16_t max_tx_2_rx;
+	uint16_t max_nb_desc; /**< The max num of descriptors. */
+};
+
+#define RTE_ETH_MAX_HAIRPIN_PEERS 32
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * A structure used to hold hairpin peer data.
+ */
+struct rte_eth_hairpin_peer {
+	uint16_t port; /**< Peer port. */
+	uint16_t queue; /**< Peer queue. */
+};
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * A structure used to configure hairpin binding.
+ */
+struct rte_eth_hairpin_conf {
+	uint16_t peer_count; /**< The number of peers. */
+	struct rte_eth_hairpin_peer peers[RTE_ETH_MAX_HAIRPIN_PEERS];
 };
 
 /**
@@ -835,6 +1086,24 @@ struct rte_eth_pfc_conf {
 };
 
 /**
+ * Tunneled type.
+ */
+enum rte_eth_tunnel_type {
+	RTE_TUNNEL_TYPE_NONE = 0,
+	RTE_TUNNEL_TYPE_VXLAN,
+	RTE_TUNNEL_TYPE_GENEVE,
+	RTE_TUNNEL_TYPE_TEREDO,
+	RTE_TUNNEL_TYPE_NVGRE,
+	RTE_TUNNEL_TYPE_IP_IN_GRE,
+	RTE_L2_TUNNEL_TYPE_E_TAG,
+	RTE_TUNNEL_TYPE_VXLAN_GPE,
+	RTE_TUNNEL_TYPE_MAX,
+};
+
+/* Deprecated API file for rte_eth_dev_filter_* functions */
+#include "rte_eth_ctrl.h"
+
+/**
  *  Memory space that can be configured to store Flow Director filters
  *  in the board memory.
  */
@@ -857,7 +1126,7 @@ enum rte_fdir_status_mode {
  * A structure used to configure the Flow Director (FDIR) feature
  * of an Ethernet port.
  *
- * If mode is RTE_FDIR_DISABLE, the pballoc value is ignored.
+ * If mode is RTE_FDIR_MODE_NONE, the pballoc value is ignored.
  */
 struct rte_fdir_conf {
 	enum rte_fdir_mode mode; /**< Flow Director mode. */
@@ -934,7 +1203,7 @@ struct rte_eth_conf {
 	/** Currently,Priority Flow Control(PFC) are supported,if DCB with PFC
 	    is needed,and the variable must be set ETH_DCB_PFC_SUPPORT. */
 	uint32_t dcb_capability_en;
-	struct rte_fdir_conf fdir_conf; /**< FDIR configuration. */
+	struct rte_fdir_conf fdir_conf; /**< FDIR configuration. DEPRECATED */
 	struct rte_intr_conf intr_conf; /**< Interrupt mode configuration. */
 };
 
@@ -959,13 +1228,15 @@ struct rte_eth_conf {
 #define DEV_RX_OFFLOAD_KEEP_CRC		0x00010000
 #define DEV_RX_OFFLOAD_SCTP_CKSUM	0x00020000
 #define DEV_RX_OFFLOAD_OUTER_UDP_CKSUM  0x00040000
+#define DEV_RX_OFFLOAD_RSS_HASH		0x00080000
 
 #define DEV_RX_OFFLOAD_CHECKSUM (DEV_RX_OFFLOAD_IPV4_CKSUM | \
 				 DEV_RX_OFFLOAD_UDP_CKSUM | \
 				 DEV_RX_OFFLOAD_TCP_CKSUM)
 #define DEV_RX_OFFLOAD_VLAN (DEV_RX_OFFLOAD_VLAN_STRIP | \
 			     DEV_RX_OFFLOAD_VLAN_FILTER | \
-			     DEV_RX_OFFLOAD_VLAN_EXTEND)
+			     DEV_RX_OFFLOAD_VLAN_EXTEND | \
+			     DEV_RX_OFFLOAD_QINQ_STRIP)
 
 /*
  * If new Rx offload capabilities are defined, they also must be
@@ -1015,11 +1286,10 @@ struct rte_eth_conf {
 #define DEV_TX_OFFLOAD_IP_TNL_TSO       0x00080000
 /** Device supports outer UDP checksum */
 #define DEV_TX_OFFLOAD_OUTER_UDP_CKSUM  0x00100000
-/**
- * Device supports match on metadata Tx offload..
- * Application must set PKT_TX_METADATA and mbuf metadata field.
- */
-#define DEV_TX_OFFLOAD_MATCH_METADATA   0x00200000
+
+/** Device supports send on timestamp */
+#define DEV_TX_OFFLOAD_SEND_ON_TIMESTAMP 0x00200000
+
 
 #define RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP 0x00000001
 /**< Device supports Rx queue setup after device started*/
@@ -1056,7 +1326,7 @@ struct rte_eth_dev_portconf {
  * Default values for switch domain id when ethdev does not support switch
  * domain definitions.
  */
-#define RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID	(0)
+#define RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID	(UINT16_MAX)
 
 /**
  * Ethernet device associated switch information
@@ -1093,6 +1363,8 @@ struct rte_eth_dev_info {
 	const uint32_t *dev_flags; /**< Device flags */
 	uint32_t min_rx_bufsize; /**< Minimum size of RX buffer. */
 	uint32_t max_rx_pktlen; /**< Maximum configurable length of RX pkt. */
+	/** Maximum configurable size of LRO aggregated packet. */
+	uint32_t max_lro_pkt_size;
 	uint16_t max_rx_queues; /**< Maximum number of RX queues. */
 	uint16_t max_tx_queues; /**< Maximum number of TX queues. */
 	uint32_t max_mac_addrs; /**< Maximum number of MAC addresses. */
@@ -1135,6 +1407,9 @@ struct rte_eth_dev_info {
 	 * embedded managed interconnect/switch.
 	 */
 	struct rte_eth_switch_info switch_info;
+
+	uint64_t reserved_64s[2]; /**< Reserved for future fields */
+	void *reserved_ptrs[2];   /**< Reserved for future fields */
 };
 
 /**
@@ -1156,6 +1431,26 @@ struct rte_eth_txq_info {
 	struct rte_eth_txconf conf; /**< queue config parameters. */
 	uint16_t nb_desc;           /**< configured number of TXDs. */
 } __rte_cache_min_aligned;
+
+/* Generic Burst mode flag definition, values can be ORed. */
+
+/**
+ * If the queues have different burst mode description, this bit will be set
+ * by PMD, then the application can iterate to retrieve burst description for
+ * all other queues.
+ */
+#define RTE_ETH_BURST_FLAG_PER_QUEUE     (1ULL << 0)
+
+/**
+ * Ethernet device RX/TX queue packet burst mode information structure.
+ * Used to retrieve information about packet burst mode setting.
+ */
+struct rte_eth_burst_mode {
+	uint64_t flags; /**< The ORed values of RTE_ETH_BURST_FLAG_xxx */
+
+#define RTE_ETH_BURST_MODE_INFO_SIZE 1024 /**< Maximum size for information */
+	char info[RTE_ETH_BURST_MODE_INFO_SIZE]; /**< burst mode information */
+};
 
 /** Maximum name length for extended statistics counters */
 #define RTE_ETH_XSTATS_NAME_SIZE 64
@@ -1216,12 +1511,6 @@ struct rte_eth_dcb_info {
 	/** rx queues assigned to tc */
 	struct rte_eth_dcb_tc_queue_mapping tc_queue;
 };
-
-/**
- * RX/TX queue states
- */
-#define RTE_ETH_QUEUE_STATE_STOPPED 0
-#define RTE_ETH_QUEUE_STATE_STARTED 1
 
 #define RTE_ETH_ALL RTE_MAX_ETHPORTS
 
@@ -1401,7 +1690,8 @@ uint16_t rte_eth_find_next(uint16_t port_id);
  *   Next port id of the device, possibly port_id_start,
  *   RTE_MAX_ETHPORTS if there is none.
  */
-uint16_t __rte_experimental
+__rte_experimental
+uint16_t
 rte_eth_find_next_of(uint16_t port_id_start,
 		const struct rte_device *parent);
 
@@ -1432,7 +1722,8 @@ rte_eth_find_next_of(uint16_t port_id_start,
  *   Next sibling port id, possibly port_id_start or ref_port_id itself,
  *   RTE_MAX_ETHPORTS if there is none.
  */
-uint16_t __rte_experimental
+__rte_experimental
+uint16_t
 rte_eth_find_next_sibling(uint16_t port_id_start,
 		uint16_t ref_port_id);
 
@@ -1464,7 +1755,8 @@ rte_eth_find_next_sibling(uint16_t port_id_start,
  * @return
  *   Negative errno value on error, 0 on success.
  */
-int __rte_experimental rte_eth_dev_owner_new(uint64_t *owner_id);
+__rte_experimental
+int rte_eth_dev_owner_new(uint64_t *owner_id);
 
 /**
  * @warning
@@ -1479,7 +1771,8 @@ int __rte_experimental rte_eth_dev_owner_new(uint64_t *owner_id);
  * @return
  *  Negative errno value on error, 0 on success.
  */
-int __rte_experimental rte_eth_dev_owner_set(const uint16_t port_id,
+__rte_experimental
+int rte_eth_dev_owner_set(const uint16_t port_id,
 		const struct rte_eth_dev_owner *owner);
 
 /**
@@ -1495,7 +1788,8 @@ int __rte_experimental rte_eth_dev_owner_set(const uint16_t port_id,
  * @return
  *  0 on success, negative errno value on error.
  */
-int __rte_experimental rte_eth_dev_owner_unset(const uint16_t port_id,
+__rte_experimental
+int rte_eth_dev_owner_unset(const uint16_t port_id,
 		const uint64_t owner_id);
 
 /**
@@ -1506,8 +1800,11 @@ int __rte_experimental rte_eth_dev_owner_unset(const uint16_t port_id,
  *
  * @param	owner_id
  *  The owner identifier.
+ * @return
+ *  0 on success, negative errno value on error.
  */
-void __rte_experimental rte_eth_dev_owner_delete(const uint64_t owner_id);
+__rte_experimental
+int rte_eth_dev_owner_delete(const uint64_t owner_id);
 
 /**
  * @warning
@@ -1522,23 +1819,9 @@ void __rte_experimental rte_eth_dev_owner_delete(const uint64_t owner_id);
  * @return
  *  0 on success, negative errno value on error..
  */
-int __rte_experimental rte_eth_dev_owner_get(const uint16_t port_id,
+__rte_experimental
+int rte_eth_dev_owner_get(const uint16_t port_id,
 		struct rte_eth_dev_owner *owner);
-
-/**
- * Get the total number of Ethernet devices that have been successfully
- * initialized by the matching Ethernet driver during the PCI probing phase
- * and that are available for applications to use. These devices must be
- * accessed by using the ``RTE_ETH_FOREACH_DEV()`` macro to deal with
- * non-contiguous ranges of devices.
- * These non-contiguous ranges can be created by calls to hotplug functions or
- * by some PMDs.
- *
- * @return
- *   - The total number of usable Ethernet devices.
- */
-__rte_deprecated
-uint16_t rte_eth_dev_count(void);
 
 /**
  * Get the number of ports which are usable for the application.
@@ -1560,7 +1843,7 @@ uint16_t rte_eth_dev_count_avail(void);
  * @return
  *   The total count of Ethernet devices.
  */
-uint16_t __rte_experimental rte_eth_dev_count_total(void);
+uint16_t rte_eth_dev_count_total(void);
 
 /**
  * Convert a numerical speed in Mbps to a bitmap flag that can be used in
@@ -1648,7 +1931,8 @@ int rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_queue,
  * @return
  *   1 when the Ethernet device is removed, otherwise 0.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_dev_is_removed(uint16_t port_id);
 
 /**
@@ -1693,9 +1977,9 @@ rte_eth_dev_is_removed(uint16_t port_id);
  * @return
  *   - 0: Success, receive queue correctly set up.
  *   - -EIO: if device is removed.
- *   - -EINVAL: The size of network buffers which can be allocated from the
- *      memory pool does not fit the various buffer sizes allowed by the
- *      device controller.
+ *   - -EINVAL: The memory pool pointer is null or the size of network buffers
+ *      which can be allocated from this memory pool does not fit the various
+ *      buffer sizes allowed by the device controller.
  *   - -ENOMEM: Unable to allocate the receive ring descriptors or to
  *      allocate network memory buffers from the memory pool when
  *      initializing receive descriptors.
@@ -1704,6 +1988,37 @@ int rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 		uint16_t nb_rx_desc, unsigned int socket_id,
 		const struct rte_eth_rxconf *rx_conf,
 		struct rte_mempool *mb_pool);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * Allocate and set up a hairpin receive queue for an Ethernet device.
+ *
+ * The function set up the selected queue to be used in hairpin.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param rx_queue_id
+ *   The index of the receive queue to set up.
+ *   The value must be in the range [0, nb_rx_queue - 1] previously supplied
+ *   to rte_eth_dev_configure().
+ * @param nb_rx_desc
+ *   The number of receive descriptors to allocate for the receive ring.
+ *   0 means the PMD will use default value.
+ * @param conf
+ *   The pointer to the hairpin configuration.
+ *
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENOMEM) if unable to allocate the resources.
+ */
+__rte_experimental
+int rte_eth_rx_hairpin_queue_setup
+	(uint16_t port_id, uint16_t rx_queue_id, uint16_t nb_rx_desc,
+	 const struct rte_eth_hairpin_conf *conf);
 
 /**
  * Allocate and set up a transmit queue for an Ethernet device.
@@ -1758,6 +2073,35 @@ int rte_eth_tx_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
 		const struct rte_eth_txconf *tx_conf);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * Allocate and set up a transmit hairpin queue for an Ethernet device.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param tx_queue_id
+ *   The index of the transmit queue to set up.
+ *   The value must be in the range [0, nb_tx_queue - 1] previously supplied
+ *   to rte_eth_dev_configure().
+ * @param nb_tx_desc
+ *   The number of transmit descriptors to allocate for the transmit ring.
+ *   0 to set default PMD value.
+ * @param conf
+ *   The hairpin configuration.
+ *
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENOMEM) if unable to allocate the resources.
+ */
+__rte_experimental
+int rte_eth_tx_hairpin_queue_setup
+	(uint16_t port_id, uint16_t tx_queue_id, uint16_t nb_tx_desc,
+	 const struct rte_eth_hairpin_conf *conf);
+
+/**
  * Return the NUMA socket to which an Ethernet device is connected
  *
  * @param port_id
@@ -1792,7 +2136,7 @@ int rte_eth_dev_is_valid_port(uint16_t port_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the receive queue is started.
- *   - -EINVAL: The port_id or the queue_id out of range.
+ *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -1809,7 +2153,7 @@ int rte_eth_dev_rx_queue_start(uint16_t port_id, uint16_t rx_queue_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the receive queue is stopped.
- *   - -EINVAL: The port_id or the queue_id out of range.
+ *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -1827,7 +2171,7 @@ int rte_eth_dev_rx_queue_stop(uint16_t port_id, uint16_t rx_queue_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the transmit queue is started.
- *   - -EINVAL: The port_id or the queue_id out of range.
+ *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -1844,7 +2188,7 @@ int rte_eth_dev_tx_queue_start(uint16_t port_id, uint16_t tx_queue_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the transmit queue is stopped.
- *   - -EINVAL: The port_id or the queue_id out of range.
+ *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -1959,16 +2303,26 @@ int rte_eth_dev_reset(uint16_t port_id);
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if support for promiscuous_enable() does not exist
+ *     for the device.
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_promiscuous_enable(uint16_t port_id);
+int rte_eth_promiscuous_enable(uint16_t port_id);
 
 /**
  * Disable receipt in promiscuous mode for an Ethernet device.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if support for promiscuous_disable() does not exist
+ *     for the device.
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_promiscuous_disable(uint16_t port_id);
+int rte_eth_promiscuous_disable(uint16_t port_id);
 
 /**
  * Return the value of promiscuous mode for an Ethernet device.
@@ -1987,16 +2341,26 @@ int rte_eth_promiscuous_get(uint16_t port_id);
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if support for allmulticast_enable() does not exist
+ *     for the device.
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_allmulticast_enable(uint16_t port_id);
+int rte_eth_allmulticast_enable(uint16_t port_id);
 
 /**
  * Disable the receipt of all multicast frames by an Ethernet device.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if support for allmulticast_disable() does not exist
+ *     for the device.
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_allmulticast_disable(uint16_t port_id);
+int rte_eth_allmulticast_disable(uint16_t port_id);
 
 /**
  * Return the value of allmulticast mode for an Ethernet device.
@@ -2020,8 +2384,12 @@ int rte_eth_allmulticast_get(uint16_t port_id);
  * @param link
  *   A pointer to an *rte_eth_link* structure to be filled with
  *   the status, the speed and the mode of the Ethernet device link.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if the function is not supported in PMD driver.
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_link_get(uint16_t port_id, struct rte_eth_link *link);
+int rte_eth_link_get(uint16_t port_id, struct rte_eth_link *link);
 
 /**
  * Retrieve the status (ON/OFF), the speed (in Mbps) and the mode (HALF-DUPLEX
@@ -2033,8 +2401,12 @@ void rte_eth_link_get(uint16_t port_id, struct rte_eth_link *link);
  * @param link
  *   A pointer to an *rte_eth_link* structure to be filled with
  *   the status, the speed and the mode of the Ethernet device link.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if the function is not supported in PMD driver.
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_link_get_nowait(uint16_t port_id, struct rte_eth_link *link);
+int rte_eth_link_get_nowait(uint16_t port_id, struct rte_eth_link *link);
 
 /**
  * Retrieve the general I/O statistics of an Ethernet device.
@@ -2064,6 +2436,7 @@ int rte_eth_stats_get(uint16_t port_id, struct rte_eth_stats *stats);
  *   - (0) if device notified to reset stats.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-ENODEV) if *port_id* invalid.
+ *   - (<0): Error code of the driver stats reset function.
  */
 int rte_eth_stats_reset(uint16_t port_id);
 
@@ -2168,7 +2541,7 @@ rte_eth_xstats_get_names_by_id(uint16_t port_id,
  *   A pointer to an ids array passed by application. This tells which
  *   statistics values function should retrieve. This parameter
  *   can be set to NULL if size is 0. In this case function will retrieve
- *   all avalible statistics.
+ *   all available statistics.
  * @param values
  *   A pointer to a table to be filled with device statistics values.
  * @param size
@@ -2211,8 +2584,14 @@ int rte_eth_xstats_get_id_by_name(uint16_t port_id, const char *xstat_name,
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
+ * @return
+ *   - (0) if device notified to reset extended stats.
+ *   - (-ENOTSUP) if pmd doesn't support both
+ *     extended stats and basic stats reset.
+ *   - (-ENODEV) if *port_id* invalid.
+ *   - (<0): Error code of the driver xstats reset function.
  */
-void rte_eth_xstats_reset(uint16_t port_id);
+int rte_eth_xstats_reset(uint16_t port_id);
 
 /**
  *  Set a mapping for the specified transmit queue to the specified per-queue
@@ -2263,8 +2642,11 @@ int rte_eth_dev_set_rx_queue_stats_mapping(uint16_t port_id,
  * @param mac_addr
  *   A pointer to a structure of type *ether_addr* to be filled with
  *   the Ethernet address of the Ethernet device.
+ * @return
+ *   - (0) if successful
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_macaddr_get(uint16_t port_id, struct ether_addr *mac_addr);
+int rte_eth_macaddr_get(uint16_t port_id, struct rte_ether_addr *mac_addr);
 
 /**
  * Retrieve the contextual information of an Ethernet device.
@@ -2281,10 +2663,12 @@ void rte_eth_macaddr_get(uint16_t port_id, struct ether_addr *mac_addr);
  *      .nb_max = UINT16_MAX,
  *      .nb_min = 0,
  *      .nb_align = 1,
+ *	.nb_seg_max = UINT16_MAX,
+ *	.nb_mtu_seg_max = UINT16_MAX,
  *  };
  *
  * device = dev->device
- * min_mtu = ETHER_MIN_MTU
+ * min_mtu = RTE_ETHER_MIN_MTU
  * max_mtu = UINT16_MAX
  *
  * The following fields will be populated if support for dev_infos_get()
@@ -2301,8 +2685,12 @@ void rte_eth_macaddr_get(uint16_t port_id, struct ether_addr *mac_addr);
  * @param dev_info
  *   A pointer to a structure of type *rte_eth_dev_info* to be filled with
  *   the contextual information of the Ethernet device.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if support for dev_infos_get() does not exist for the device.
+ *   - (-ENODEV) if *port_id* invalid.
  */
-void rte_eth_dev_info_get(uint16_t port_id, struct rte_eth_dev_info *dev_info);
+int rte_eth_dev_info_get(uint16_t port_id, struct rte_eth_dev_info *dev_info);
 
 /**
  * Retrieve the firmware version of a device.
@@ -2366,6 +2754,42 @@ int rte_eth_dev_fw_version_get(uint16_t port_id,
  */
 int rte_eth_dev_get_supported_ptypes(uint16_t port_id, uint32_t ptype_mask,
 				     uint32_t *ptypes, int num);
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Inform Ethernet device about reduced range of packet types to handle.
+ *
+ * Application can use this function to set only specific ptypes that it's
+ * interested. This information can be used by the PMD to optimize Rx path.
+ *
+ * The function accepts an array `set_ptypes` allocated by the caller to
+ * store the packet types set by the driver, the last element of the array
+ * is set to RTE_PTYPE_UNKNOWN. The size of the `set_ptype` array should be
+ * `rte_eth_dev_get_supported_ptypes() + 1` else it might only be filled
+ * partially.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param ptype_mask
+ *   The ptype family that application is interested in should be bitwise OR of
+ *   RTE_PTYPE_*_MASK or 0.
+ * @param set_ptypes
+ *   An array pointer to store set packet types, allocated by caller. The
+ *   function marks the end of array with RTE_PTYPE_UNKNOWN.
+ * @param num
+ *   Size of the array pointed by param ptypes.
+ *   Should be rte_eth_dev_get_supported_ptypes() + 1 to accommodate the
+ *   set ptypes.
+ * @return
+ *   - (0) if Success.
+ *   - (-ENODEV) if *port_id* invalid.
+ *   - (-EINVAL) if *ptype_mask* is invalid (or) set_ptypes is NULL and
+ *     num > 0.
+ */
+__rte_experimental
+int rte_eth_dev_set_ptypes(uint16_t port_id, uint32_t ptype_mask,
+			   uint32_t *set_ptypes, unsigned int num);
 
 /**
  * Retrieve the MTU of an Ethernet device.
@@ -2412,7 +2836,7 @@ int rte_eth_dev_set_mtu(uint16_t port_id, uint16_t mtu);
  *   Otherwise, disable VLAN filtering of VLAN packets tagged with *vlan_id*.
  * @return
  *   - (0) if successful.
- *   - (-ENOSUP) if hardware-assisted VLAN filtering not configured.
+ *   - (-ENOTSUP) if hardware-assisted VLAN filtering not configured.
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EIO) if device is removed.
  *   - (-ENOSYS) if VLAN filtering on *port_id* disabled.
@@ -2435,7 +2859,7 @@ int rte_eth_dev_vlan_filter(uint16_t port_id, uint16_t vlan_id, int on);
  *   If 0, Disable VLAN Stripping of the receive queue of the Ethernet port.
  * @return
  *   - (0) if successful.
- *   - (-ENOSUP) if hardware-assisted VLAN stripping not configured.
+ *   - (-ENOTSUP) if hardware-assisted VLAN stripping not configured.
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EINVAL) if *rx_queue_id* invalid.
  */
@@ -2455,7 +2879,7 @@ int rte_eth_dev_set_vlan_strip_on_queue(uint16_t port_id, uint16_t rx_queue_id,
  *   The Tag Protocol ID
  * @return
  *   - (0) if successful.
- *   - (-ENOSUP) if hardware-assisted VLAN TPID setup is not supported.
+ *   - (-ENOTSUP) if hardware-assisted VLAN TPID setup is not supported.
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EIO) if device is removed.
  */
@@ -2478,9 +2902,10 @@ int rte_eth_dev_set_vlan_ether_type(uint16_t port_id,
  *       ETH_VLAN_STRIP_OFFLOAD
  *       ETH_VLAN_FILTER_OFFLOAD
  *       ETH_VLAN_EXTEND_OFFLOAD
+ *       ETH_QINQ_STRIP_OFFLOAD
  * @return
  *   - (0) if successful.
- *   - (-ENOSUP) if hardware-assisted VLAN filtering not configured.
+ *   - (-ENOTSUP) if hardware-assisted VLAN filtering not configured.
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EIO) if device is removed.
  */
@@ -2496,6 +2921,7 @@ int rte_eth_dev_set_vlan_offload(uint16_t port_id, int offload_mask);
  *       ETH_VLAN_STRIP_OFFLOAD
  *       ETH_VLAN_FILTER_OFFLOAD
  *       ETH_VLAN_EXTEND_OFFLOAD
+ *       ETH_QINQ_STRIP_OFFLOAD
  *   - (-ENODEV) if *port_id* invalid.
  */
 int rte_eth_dev_get_vlan_offload(uint16_t port_id);
@@ -2638,7 +3064,7 @@ rte_eth_tx_buffer_count_callback(struct rte_mbuf **pkts, uint16_t unsent,
 /**
  * Request the driver to free mbufs currently cached by the driver. The
  * driver will only free the mbuf if it is no longer in use. It is the
- * application's responsibity to ensure rte_eth_tx_buffer_flush(..) is
+ * application's responsibility to ensure rte_eth_tx_buffer_flush(..) is
  * called if needed.
  *
  * @param port_id
@@ -2719,6 +3145,7 @@ enum rte_eth_event_type {
 	RTE_ETH_EVENT_NEW,      /**< port is probed */
 	RTE_ETH_EVENT_DESTROY,  /**< port is released */
 	RTE_ETH_EVENT_IPSEC,    /**< IPsec offload related event */
+	RTE_ETH_EVENT_FLOW_AGED,/**< New aged-out flows is detected */
 	RTE_ETH_EVENT_MAX       /**< max value of this enum */
 };
 
@@ -2874,7 +3301,8 @@ int rte_eth_dev_rx_intr_ctl_q(uint16_t port_id, uint16_t queue_id,
  *           successful.
  *   - (-1) on error.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_dev_rx_intr_ctl_q_get_fd(uint16_t port_id, uint16_t queue_id);
 
 /**
@@ -2977,7 +3405,7 @@ int rte_eth_dev_priority_flow_ctrl_set(uint16_t port_id,
  *   - (-ENOSPC) if no more MAC addresses can be added.
  *   - (-EINVAL) if MAC address is invalid.
  */
-int rte_eth_dev_mac_addr_add(uint16_t port_id, struct ether_addr *mac_addr,
+int rte_eth_dev_mac_addr_add(uint16_t port_id, struct rte_ether_addr *mac_addr,
 				uint32_t pool);
 
 /**
@@ -2993,7 +3421,8 @@ int rte_eth_dev_mac_addr_add(uint16_t port_id, struct ether_addr *mac_addr,
  *   - (-ENODEV) if *port* invalid.
  *   - (-EADDRINUSE) if attempting to remove the default MAC address
  */
-int rte_eth_dev_mac_addr_remove(uint16_t port_id, struct ether_addr *mac_addr);
+int rte_eth_dev_mac_addr_remove(uint16_t port_id,
+				struct rte_ether_addr *mac_addr);
 
 /**
  * Set the default MAC address.
@@ -3009,7 +3438,7 @@ int rte_eth_dev_mac_addr_remove(uint16_t port_id, struct ether_addr *mac_addr);
  *   - (-EINVAL) if MAC address is invalid.
  */
 int rte_eth_dev_default_mac_addr_set(uint16_t port_id,
-		struct ether_addr *mac_addr);
+		struct rte_ether_addr *mac_addr);
 
 /**
  * Update Redirection Table(RETA) of Receive Side Scaling of Ethernet device.
@@ -3071,7 +3500,7 @@ int rte_eth_dev_rss_reta_query(uint16_t port_id,
  *   - (-EIO) if device is removed.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_eth_dev_uc_hash_table_set(uint16_t port_id, struct ether_addr *addr,
+int rte_eth_dev_uc_hash_table_set(uint16_t port_id, struct rte_ether_addr *addr,
 				  uint8_t on);
 
  /**
@@ -3251,6 +3680,7 @@ rte_eth_dev_udp_tunnel_port_delete(uint16_t port_id,
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EIO) if device is removed.
  */
+__rte_deprecated
 int rte_eth_dev_filter_supported(uint16_t port_id,
 		enum rte_filter_type filter_type);
 
@@ -3273,6 +3703,7 @@ int rte_eth_dev_filter_supported(uint16_t port_id,
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
  */
+__rte_deprecated
 int rte_eth_dev_filter_ctrl(uint16_t port_id, enum rte_filter_type filter_type,
 			enum rte_filter_op filter_op, void *arg);
 
@@ -3460,7 +3891,8 @@ int rte_eth_remove_tx_callback(uint16_t port_id, uint16_t queue_id,
  * @return
  *   - 0: Success
  *   - -ENOTSUP: routine is not supported by the device PMD.
- *   - -EINVAL:  The port_id or the queue_id is out of range.
+ *   - -EINVAL:  The port_id or the queue_id is out of range, or the queue
+ *               is hairpin queue.
  */
 int rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 	struct rte_eth_rxq_info *qinfo);
@@ -3480,10 +3912,53 @@ int rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
  * @return
  *   - 0: Success
  *   - -ENOTSUP: routine is not supported by the device PMD.
- *   - -EINVAL:  The port_id or the queue_id is out of range.
+ *   - -EINVAL:  The port_id or the queue_id is out of range, or the queue
+ *               is hairpin queue.
  */
 int rte_eth_tx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 	struct rte_eth_txq_info *qinfo);
+
+/**
+ * Retrieve information about the Rx packet burst mode.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The Rx queue on the Ethernet device for which information
+ *   will be retrieved.
+ * @param mode
+ *   A pointer to a structure of type *rte_eth_burst_mode* to be filled
+ *   with the information of the packet burst mode.
+ *
+ * @return
+ *   - 0: Success
+ *   - -ENOTSUP: routine is not supported by the device PMD.
+ *   - -EINVAL:  The port_id or the queue_id is out of range.
+ */
+__rte_experimental
+int rte_eth_rx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
+	struct rte_eth_burst_mode *mode);
+
+/**
+ * Retrieve information about the Tx packet burst mode.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The Tx queue on the Ethernet device for which information
+ *   will be retrieved.
+ * @param mode
+ *   A pointer to a structure of type *rte_eth_burst_mode* to be filled
+ *   with the information of the packet burst mode.
+ *
+ * @return
+ *   - 0: Success
+ *   - -ENOTSUP: routine is not supported by the device PMD.
+ *   - -EINVAL:  The port_id or the queue_id is out of range.
+ */
+__rte_experimental
+int rte_eth_tx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
+	struct rte_eth_burst_mode *mode);
 
 /**
  * Retrieve device registers and register attributes (number of registers and
@@ -3569,7 +4044,8 @@ int rte_eth_dev_set_eeprom(uint16_t port_id, struct rte_dev_eeprom_info *info);
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_dev_get_module_info(uint16_t port_id,
 			    struct rte_eth_dev_module_info *modinfo);
 
@@ -3591,7 +4067,8 @@ rte_eth_dev_get_module_info(uint16_t port_id,
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_eth_dev_get_module_eeprom(uint16_t port_id,
 			      struct rte_dev_eeprom_info *info);
 
@@ -3614,7 +4091,7 @@ rte_eth_dev_get_module_eeprom(uint16_t port_id,
  *   - (-ENOSPC) if *port_id* has not enough multicast filtering resources.
  */
 int rte_eth_dev_set_mc_addr_list(uint16_t port_id,
-				 struct ether_addr *mc_addr_set,
+				 struct rte_ether_addr *mc_addr_set,
 				 uint32_t nb_mc_addr);
 
 /**
@@ -3738,6 +4215,54 @@ int rte_eth_timesync_read_time(uint16_t port_id, struct timespec *time);
  *   - -ENOTSUP: The function is not supported by the Ethernet driver.
  */
 int rte_eth_timesync_write_time(uint16_t port_id, const struct timespec *time);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Read the current clock counter of an Ethernet device
+ *
+ * This returns the current raw clock value of an Ethernet device. It is
+ * a raw amount of ticks, with no given time reference.
+ * The value returned here is from the same clock than the one
+ * filling timestamp field of Rx packets when using hardware timestamp
+ * offload. Therefore it can be used to compute a precise conversion of
+ * the device clock to the real time.
+ *
+ * E.g, a simple heuristic to derivate the frequency would be:
+ * uint64_t start, end;
+ * rte_eth_read_clock(port, start);
+ * rte_delay_ms(100);
+ * rte_eth_read_clock(port, end);
+ * double freq = (end - start) * 10;
+ *
+ * Compute a common reference with:
+ * uint64_t base_time_sec = current_time();
+ * uint64_t base_clock;
+ * rte_eth_read_clock(port, base_clock);
+ *
+ * Then, convert the raw mbuf timestamp with:
+ * base_time_sec + (double)(mbuf->timestamp - base_clock) / freq;
+ *
+ * This simple example will not provide a very good accuracy. One must
+ * at least measure multiple times the frequency and do a regression.
+ * To avoid deviation from the system time, the common reference can
+ * be repeated from time to time. The integer division can also be
+ * converted by a multiplication and a shift for better performance.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param clock
+ *   Pointer to the uint64_t that holds the raw clock value.
+ *
+ * @return
+ *   - 0: Success.
+ *   - -ENODEV: The port ID is invalid.
+ *   - -ENOTSUP: The function is not supported by the Ethernet driver.
+ */
+__rte_experimental
+int
+rte_eth_read_clock(uint16_t port_id, uint64_t *clock);
 
 /**
  * Config l2 tunnel ether type of an Ethernet device for filtering specific
@@ -3872,6 +4397,23 @@ rte_eth_dev_pool_ops_supported(uint16_t port_id, const char *pool);
 void *
 rte_eth_dev_get_sec_ctx(uint16_t port_id);
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * Query the device hairpin capabilities.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param cap
+ *   Pointer to a structure that will hold the hairpin capabilities.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ */
+__rte_experimental
+int rte_eth_dev_hairpin_capability_get(uint16_t port_id,
+				       struct rte_eth_hairpin_cap *cap);
 
 #include <rte_ethdev_core.h>
 
@@ -3989,6 +4531,7 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
 	}
 #endif
 
+	rte_ethdev_trace_rx_burst(port_id, queue_id, (void **)rx_pkts, nb_rx);
 	return nb_rx;
 }
 
@@ -4252,6 +4795,8 @@ rte_eth_tx_burst(uint16_t port_id, uint16_t queue_id,
 	}
 #endif
 
+	rte_ethdev_trace_tx_burst(port_id, queue_id, (void **)tx_pkts,
+		nb_pkts);
 	return (*dev->tx_pkt_burst)(dev->data->tx_queues[queue_id], tx_pkts, nb_pkts);
 }
 
@@ -4303,8 +4848,8 @@ rte_eth_tx_burst(uint16_t port_id, uint16_t queue_id,
  *   The number of packets correct and ready to be sent. The return value can be
  *   less than the value of the *tx_pkts* parameter when some packet doesn't
  *   meet devices requirements with rte_errno set appropriately:
- *   - -EINVAL: offload flags are not correctly set
- *   - -ENOTSUP: the offload feature is not supported by the hardware
+ *   - EINVAL: offload flags are not correctly set
+ *   - ENOTSUP: the offload feature is not supported by the hardware
  *
  */
 

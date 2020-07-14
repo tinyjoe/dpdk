@@ -11,12 +11,25 @@ extern "C" {
 #include <channel_commands.h>
 
 /**
+ * Check if any Virtio-Serial VM end-points exist in path.
+ *
+ * @param path
+ *  The path to the serial device on the filesystem
+ *
+ * @return
+ *  - 1 if at least one potential end-point found.
+ *  - 0 if no end-points found.
+ */
+int guest_channel_host_check_exists(const char *path);
+
+/**
  * Connect to the Virtio-Serial VM end-point located in path. It is
  * thread safe for unique lcore_ids. This function must be only called once from
  * each lcore.
  *
  * @param path
  *  The path to the serial device on the filesystem
+ *
  * @param lcore_id
  *  lcore_id.
  *
@@ -67,6 +80,53 @@ int guest_channel_send_msg(struct channel_packet *pkt, unsigned int lcore_id);
  */
 int rte_power_guest_channel_send_msg(struct channel_packet *pkt,
 			unsigned int lcore_id);
+
+/**
+ * Read a message contained in pkt over the Virtio-Serial
+ * from the host endpoint.
+ *
+ * @param pkt
+ *  Pointer to channel_packet or
+ *  channel_packet_freq_list struct.
+ *
+ * @param pkt_len
+ *  Size of expected data packet.
+ *
+ * @param lcore_id
+ *  lcore_id.
+ *
+ * @return
+ *  - 0 on success.
+ *  - Negative on error.
+ */
+int power_guest_channel_read_msg(void *pkt,
+		size_t pkt_len,
+		unsigned int lcore_id);
+
+/**
+ * Receive a message contained in pkt over the Virtio-Serial
+ * from the host endpoint.
+ *
+ * @param pkt
+ *  Pointer to channel_packet or
+ *  channel_packet_freq_list struct.
+ *
+ * @param pkt_len
+ *  Size of expected data packet.
+ *
+ * @param lcore_id
+ *  lcore_id.
+ *
+ * @return
+ *  - 0 on success.
+ *  - Negative on error.
+ */
+__rte_experimental
+int
+rte_power_guest_channel_receive_msg(void *pkt,
+		size_t pkt_len,
+		unsigned int lcore_id);
+
 
 #ifdef __cplusplus
 }

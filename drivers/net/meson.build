@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
+if is_windows
+	subdir_done()
+endif
+
 drivers = ['af_packet',
 	'af_xdp',
 	'ark',
@@ -17,12 +21,16 @@ drivers = ['af_packet',
 	'enic',
 	'failsafe',
 	'fm10k', 'i40e',
+	'hinic',
+	'hns3',
 	'iavf',
 	'ice',
-	'ifc',
+	'igc',
+	'ipn3ke',
 	'ixgbe',
 	'kni',
 	'liquidio',
+	'memif',
 	'mlx4',
 	'mlx5',
 	'mvneta',
@@ -30,7 +38,13 @@ drivers = ['af_packet',
 	'netvsc',
 	'nfb',
 	'nfp',
-	'null', 'octeontx', 'pcap', 'qede', 'ring',
+	'null',
+	'octeontx',
+	'octeontx2',
+	'pcap',
+	'pfe',
+	'qede',
+	'ring',
 	'sfc',
 	'softnic',
 	'szedata2',

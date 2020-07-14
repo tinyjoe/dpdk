@@ -15,9 +15,7 @@
 #include <rte_tailq.h>
 
 #include "rte_stack.h"
-#include "rte_stack_pvt.h"
-
-int stack_logtype;
+#include "stack_pvt.h"
 
 TAILQ_HEAD(rte_stack_list, rte_tailq_entry);
 
@@ -59,6 +57,11 @@ rte_stack_create(const char *name, unsigned int count, int socket_id,
 	unsigned int sz;
 	int ret;
 
+	if (flags & ~(RTE_STACK_F_LF)) {
+		STACK_LOG_ERR("Unsupported stack flags %#x\n", flags);
+		return NULL;
+	}
+
 #ifdef RTE_ARCH_64
 	RTE_BUILD_BUG_ON(sizeof(struct rte_stack_lf_head) != 16);
 #else
@@ -84,13 +87,13 @@ rte_stack_create(const char *name, unsigned int count, int socket_id,
 		return NULL;
 	}
 
-	rte_rwlock_write_lock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_lock();
 
 	mz = rte_memzone_reserve_aligned(mz_name, sz, socket_id,
 					 0, __alignof__(*s));
 	if (mz == NULL) {
 		STACK_LOG_ERR("Cannot reserve stack memzone!\n");
-		rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+		rte_mcfg_tailq_write_unlock();
 		rte_free(te);
 		return NULL;
 	}
@@ -102,7 +105,7 @@ rte_stack_create(const char *name, unsigned int count, int socket_id,
 	/* Store the name for later lookups */
 	ret = strlcpy(s->name, name, sizeof(s->name));
 	if (ret < 0 || ret >= (int)sizeof(s->name)) {
-		rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+		rte_mcfg_tailq_write_unlock();
 
 		rte_errno = ENAMETOOLONG;
 		rte_free(te);
@@ -120,7 +123,7 @@ rte_stack_create(const char *name, unsigned int count, int socket_id,
 
 	TAILQ_INSERT_TAIL(stack_list, te, next);
 
-	rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_unlock();
 
 	return s;
 }
@@ -135,7 +138,7 @@ rte_stack_free(struct rte_stack *s)
 		return;
 
 	stack_list = RTE_TAILQ_CAST(rte_stack_tailq.head, rte_stack_list);
-	rte_rwlock_write_lock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_lock();
 
 	/* find out tailq entry */
 	TAILQ_FOREACH(te, stack_list, next) {
@@ -144,13 +147,13 @@ rte_stack_free(struct rte_stack *s)
 	}
 
 	if (te == NULL) {
-		rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+		rte_mcfg_tailq_write_unlock();
 		return;
 	}
 
 	TAILQ_REMOVE(stack_list, te, next);
 
-	rte_rwlock_write_unlock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_write_unlock();
 
 	rte_free(te);
 
@@ -171,7 +174,7 @@ rte_stack_lookup(const char *name)
 
 	stack_list = RTE_TAILQ_CAST(rte_stack_tailq.head, rte_stack_list);
 
-	rte_rwlock_read_lock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_read_lock();
 
 	TAILQ_FOREACH(te, stack_list, next) {
 		r = (struct rte_stack *) te->data;
@@ -179,7 +182,7 @@ rte_stack_lookup(const char *name)
 			break;
 	}
 
-	rte_rwlock_read_unlock(RTE_EAL_TAILQ_RWLOCK);
+	rte_mcfg_tailq_read_unlock();
 
 	if (te == NULL) {
 		rte_errno = ENOENT;
@@ -189,9 +192,4 @@ rte_stack_lookup(const char *name)
 	return r;
 }
 
-RTE_INIT(librte_stack_init_log)
-{
-	stack_logtype = rte_log_register("lib.stack");
-	if (stack_logtype >= 0)
-		rte_log_set_level(stack_logtype, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(stack_logtype, lib.stack, NOTICE);

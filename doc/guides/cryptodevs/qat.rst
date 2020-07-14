@@ -6,8 +6,8 @@ Intel(R) QuickAssist (QAT) Crypto Poll Mode Driver
 
 QAT documentation consists of three parts:
 
-* Details of the symmetric crypto service below.
-* Details of the `compression service <http://doc.dpdk.org/guides/compressdevs/qat_comp.html>`_
+* Details of the symmetric and asymmetric crypto services below.
+* Details of the :doc:`compression service <../compressdevs/qat_comp>`
   in the compressdev drivers section.
 * Details of building the common QAT infrastructure and the PMDs to support the
   above services. See :ref:`building_qat` below.
@@ -16,20 +16,20 @@ QAT documentation consists of three parts:
 Symmetric Crypto Service on QAT
 -------------------------------
 
-The QAT crypto PMD provides poll mode crypto driver support for the following
-hardware accelerator devices:
+The QAT symmetric crypto PMD (hereafter referred to as `QAT SYM [PMD]`) provides
+poll mode crypto driver support for the following hardware accelerator devices:
 
 * ``Intel QuickAssist Technology DH895xCC``
 * ``Intel QuickAssist Technology C62x``
 * ``Intel QuickAssist Technology C3xxx``
 * ``Intel QuickAssist Technology D15xx``
-* ``Intel QuickAssist Technology C4xxx``
+* ``Intel QuickAssist Technology P5xxx``
 
 
 Features
 ~~~~~~~~
 
-The QAT PMD has support for:
+The QAT SYM PMD has support for:
 
 Cipher algorithms:
 
@@ -52,10 +52,15 @@ Cipher algorithms:
 
 Hash algorithms:
 
+* ``RTE_CRYPTO_AUTH_SHA1``
 * ``RTE_CRYPTO_AUTH_SHA1_HMAC``
+* ``RTE_CRYPTO_AUTH_SHA224``
 * ``RTE_CRYPTO_AUTH_SHA224_HMAC``
+* ``RTE_CRYPTO_AUTH_SHA256``
 * ``RTE_CRYPTO_AUTH_SHA256_HMAC``
+* ``RTE_CRYPTO_AUTH_SHA384``
 * ``RTE_CRYPTO_AUTH_SHA384_HMAC``
+* ``RTE_CRYPTO_AUTH_SHA512``
 * ``RTE_CRYPTO_AUTH_SHA512_HMAC``
 * ``RTE_CRYPTO_AUTH_AES_XCBC_MAC``
 * ``RTE_CRYPTO_AUTH_SNOW3G_UIA2``
@@ -70,6 +75,33 @@ Supported AEAD algorithms:
 
 * ``RTE_CRYPTO_AEAD_AES_GCM``
 * ``RTE_CRYPTO_AEAD_AES_CCM``
+* ``RTE_CRYPTO_AEAD_CHACHA20_POLY1305``
+
+Protocol offloads:
+
+* ``RTE_SECURITY_PROTOCOL_DOCSIS``
+
+Supported Chains
+~~~~~~~~~~~~~~~~
+
+All the usual chains are supported and also some mixed chains:
+
+.. table:: Supported hash-cipher chains for wireless digest-encrypted cases
+
+   +------------------+-----------+-------------+----------+----------+
+   | Cipher algorithm | NULL AUTH | SNOW3G UIA2 | ZUC EIA3 | AES CMAC |
+   +==================+===========+=============+==========+==========+
+   | NULL CIPHER      | Y         | 2&3         | 2&3      | Y        |
+   +------------------+-----------+-------------+----------+----------+
+   | SNOW3G UEA2      | 2&3       | Y           | 2&3      | 2&3      |
+   +------------------+-----------+-------------+----------+----------+
+   | ZUC EEA3         | 2&3       | 2&3         | 2&3      | 2&3      |
+   +------------------+-----------+-------------+----------+----------+
+   | AES CTR          | Y         | 2&3         | 2&3      | Y        |
+   +------------------+-----------+-------------+----------+----------+
+
+* The combinations marked as "Y" are supported on all QAT hardware versions.
+* The combinations marked as "2&3" are supported on GEN2/GEN3 QAT hardware only.
 
 
 Limitations
@@ -81,7 +113,27 @@ Limitations
 * No BSD support as BSD QAT kernel driver not available.
 * ZUC EEA3/EIA3 is not supported by dh895xcc devices
 * Maximum additional authenticated data (AAD) for GCM is 240 bytes long and must be passed to the device in a buffer rounded up to the nearest block-size multiple (x16) and padded with zeros.
-* Queue pairs are not thread-safe (that is, within a single queue pair, RX and TX from different lcores is not supported).
+* Queue-pairs are thread-safe on Intel CPUs but Queues are not (that is, within a single
+  queue-pair all enqueues to the TX queue must be done from one thread and all dequeues
+  from the RX queue must be done from one thread, but enqueues and dequeues may be done
+  in different threads.)
+* A GCM limitation exists, but only in the case where there are multiple
+  generations of QAT devices on a single platform.
+  To optimise performance, the GCM crypto session should be initialised for the
+  device generation to which the ops will be enqueued. Specifically if a GCM
+  session is initialised on a GEN2 device, but then attached to an op enqueued
+  to a GEN3 device, it will work but cannot take advantage of hardware
+  optimisations in the GEN3 device. And if a GCM session is initialised on a
+  GEN3 device, then attached to an op sent to a GEN1/GEN2 device, it will not be
+  enqueued to the device and will be marked as failed. The simplest way to
+  mitigate this is to use the bdf whitelist to avoid mixing devices of different
+  generations in the same process if planning to use for GCM.
+* The mixed algo feature on GEN2 is not supported by all kernel drivers. Check
+  the notes under the Available Kernel Drivers table below for specific details.
+* Out-of-place is not supported for combined Crypto-CRC DOCSIS security
+  protocol.
+* ``RTE_CRYPTO_CIPHER_DES_DOCSISBPI`` is not supported for combined Crypto-CRC
+  DOCSIS security protocol.
 
 Extra notes on KASUMI F9
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -104,13 +156,29 @@ must be such that points at the start of the COUNT bytes.
 Asymmetric Crypto Service on QAT
 --------------------------------
 
-The QAT Asym PMD has support for:
+The QAT asymmetric crypto PMD (hereafter referred to as `QAT ASYM [PMD]`) provides
+poll mode crypto driver support for the following hardware accelerator devices:
 
-* ``Modular exponentiation``
-* ``Modular multiplicative inverse``
+* ``Intel QuickAssist Technology DH895xCC``
+* ``Intel QuickAssist Technology C62x``
+* ``Intel QuickAssist Technology C3xxx``
+* ``Intel QuickAssist Technology D15xx``
+* ``Intel QuickAssist Technology P5xxx``
+
+The QAT ASYM PMD has support for:
+
+* ``RTE_CRYPTO_ASYM_XFORM_MODEX``
+* ``RTE_CRYPTO_ASYM_XFORM_MODINV``
 
 Limitations
 ~~~~~~~~~~~
+
+* Big integers longer than 4096 bits are not supported.
+* Queue-pairs are thread-safe on Intel CPUs but Queues are not (that is, within a single
+  queue-pair all enqueues to the TX queue must be done from one thread and all dequeues
+  from the RX queue must be done from one thread, but enqueues and dequeues may be done
+  in different threads.)
+* RSA-2560, RSA-3584 are not supported
 
 .. _building_qat:
 
@@ -134,7 +202,7 @@ Configuring and Building the DPDK QAT PMDs
 
 
 Further information on configuring, building and installing DPDK is described
-`here <http://doc.dpdk.org/guides/linux_gsg/build_dpdk.html>`_.
+:doc:`here <../linux_gsg/build_dpdk>`.
 
 
 Quick instructions for QAT cryptodev PMD are as follows:
@@ -144,6 +212,8 @@ Quick instructions for QAT cryptodev PMD are as follows:
 	cd to the top-level DPDK directory
 	make defconfig
 	sed -i 's,\(CONFIG_RTE_LIBRTE_PMD_QAT_SYM\)=n,\1=y,' build/.config
+	or/and
+	sed -i 's,\(CONFIG_RTE_LIBRTE_PMD_QAT_ASYM\)=n,\1=y,' build/.config
 	make
 
 Quick instructions for QAT compressdev PMD are as follows:
@@ -166,13 +236,14 @@ These are the build configuration options affecting QAT, and their default value
 
 	CONFIG_RTE_LIBRTE_PMD_QAT=y
 	CONFIG_RTE_LIBRTE_PMD_QAT_SYM=n
+	CONFIG_RTE_LIBRTE_PMD_QAT_ASYM=n
 	CONFIG_RTE_PMD_QAT_MAX_PCI_DEVICES=48
 	CONFIG_RTE_PMD_QAT_COMP_IM_BUFFER_SIZE=65536
 
 CONFIG_RTE_LIBRTE_PMD_QAT must be enabled for any QAT PMD to be built.
 
-The QAT cryptodev PMD has an external dependency on libcrypto, so is not
-built by default. CONFIG_RTE_LIBRTE_PMD_QAT_SYM should be enabled to build it.
+Both QAT SYM PMD and QAT ASYM PMD have an external dependency on libcrypto, so are not
+built by default. CONFIG_RTE_LIBRTE_PMD_QAT_SYM/ASYM should be enabled to build them.
 
 The QAT compressdev PMD has no external dependencies, so needs no configuration
 options and is built by default.
@@ -180,9 +251,18 @@ options and is built by default.
 The number of VFs per PF varies - see table below. If multiple QAT packages are
 installed on a platform then CONFIG_RTE_PMD_QAT_MAX_PCI_DEVICES should be
 adjusted to the number of VFs which the QAT common code will need to handle.
-Note, there are separate config items for max cryptodevs CONFIG_RTE_CRYPTO_MAX_DEVS
-and max compressdevs CONFIG_RTE_COMPRESS_MAX_DEVS, if necessary these should be
-adjusted to handle the total of QAT and other devices which the process will use.
+
+.. Note::
+
+        There are separate config items (not QAT-specific) for max cryptodevs
+        CONFIG_RTE_CRYPTO_MAX_DEVS and max compressdevs CONFIG_RTE_COMPRESS_MAX_DEVS,
+        if necessary these should be adjusted to handle the total of QAT and other
+        devices which the process will use. In particular for crypto, where each
+        QAT VF may expose two crypto devices, sym and asym, it may happen that the
+        number of devices will be bigger than MAX_DEVS and the process will show an error
+        during PMD initialisation. To avoid this problem CONFIG_RTE_CRYPTO_MAX_DEVS may be
+        increased or -w, pci-whitelist domain:bus:devid:func option may be used.
+
 
 QAT compression PMD needs intermediate buffers to support Deflate compression
 with Dynamic Huffman encoding. CONFIG_RTE_PMD_QAT_COMP_IM_BUFFER_SIZE
@@ -193,27 +273,57 @@ allocated while for GEN1 devices, 12 buffers are allocated, plus 1472 bytes over
 .. Note::
 
 	If the compressed output of a Deflate operation using Dynamic Huffman
-        Encoding is too big to fit in an intermediate buffer, then the
-	operation will fall back to fixed compression rather than failing the operation.
+	Encoding is too big to fit in an intermediate buffer, then the
+	operation will be split into smaller operations and their results will
+	be merged afterwards.
+	This is not possible if any checksum calculation was requested - in such
+	case the code falls back to fixed compression.
 	To avoid this less performant case, applications should configure
 	the intermediate buffer size to be larger than the expected input data size
 	(compressed output size is usually unknown, so the only option is to make
 	larger than the input size).
 
 
+Running QAT PMD with minimum threshold for burst size
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If only a small number or packets can be enqueued. Each enqueue causes an expensive MMIO write.
+These MMIO write occurrences can be optimised by setting any of the following parameters:
+
+- qat_sym_enq_threshold
+- qat_asym_enq_threshold
+- qat_comp_enq_threshold
+
+When any of these parameters is set rte_cryptodev_enqueue_burst function will
+return 0 (thereby avoiding an MMIO) if the device is congested and number of packets
+possible to enqueue is smaller.
+To use this feature the user must set the parameter on process start as a device additional parameter::
+
+  -w 03:01.1,qat_sym_enq_threshold=32,qat_comp_enq_threshold=16
+
+All parameters can be used with the same device regardless of order. Parameters are separated
+by comma. When the same parameter is used more than once first occurrence of the parameter
+is used.
+Maximum threshold that can be set is 32.
+
+
 Device and driver naming
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-* The qat cryptodev driver name is "crypto_qat".
-  The "rte_cryptodev_devices_get()" returns the devices exposed by this driver.
+* The qat cryptodev symmetric crypto driver name is "crypto_qat".
+* The qat cryptodev asymmetric crypto driver name is "crypto_qat_asym".
 
-* Each qat crypto device has a unique name, in format
+The "rte_cryptodev_devices_get()" returns the devices exposed by either of these drivers.
+
+* Each qat sym crypto device has a unique name, in format
   "<pci bdf>_<service>", e.g. "0000:41:01.0_qat_sym".
+* Each qat asym crypto device has a unique name, in format
+  "<pci bdf>_<service>", e.g. "0000:41:01.0_qat_asym".
   This name can be passed to "rte_cryptodev_get_dev_id()" to get the device_id.
 
 .. Note::
 
-	The qat crypto driver name is passed to the dpdk-test-crypto-perf tool in the "-devtype" parameter.
+	The cryptodev driver name is passed to the dpdk-test-crypto-perf tool in the "-devtype" parameter.
 
 	The qat crypto device name is in the format of the slave parameter passed to the crypto scheduler.
 
@@ -237,7 +347,8 @@ relationships between the PF/VF devices and the PMDs visible to
 DPDK applications.
 
 Each QuickAssist PF device exposes a number of VF devices. Each VF device can
-enable one cryptodev PMD and/or one compressdev PMD.
+enable one symmetric cryptodev PMD and/or one asymmetric cryptodev PMD and/or
+one compressdev PMD.
 These QAT PMDs share the same underlying device and pci-mgmt code, but are
 enumerated independently on their respective APIs and appear as independent
 devices to applications.
@@ -268,22 +379,24 @@ to see the full table)
    +=====+=====+=====+=====+==========+===============+===============+============+========+======+========+========+
    | Yes | No  | No  | 1   | DH895xCC | linux/4.4+    | qat_dh895xcc  | dh895xcc   | 435    | 1    | 443    | 32     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
-   | Yes | No  | No  | "   | "        | 01.org/4.2.0+ | "             | "          | "      | "    | "      | "      |
+   | Yes | Yes | No  | "   | "        | 01.org/4.2.0+ | "             | "          | "      | "    | "      | "      |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
-   | Yes | No  | Yes | "   | "        | 01.org/4.3.0+ | "             | "          | "      | "    | "      | "      |
+   | Yes | Yes | Yes | "   | "        | 01.org/4.3.0+ | "             | "          | "      | "    | "      | "      |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
    | Yes | No  | No  | 2   | C62x     | linux/4.5+    | qat_c62x      | c6xx       | 37c8   | 3    | 37c9   | 16     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
-   | Yes | No  | Yes | "   | "        | 01.org/4.2.0+ | "             | "          | "      | "    | "      | "      |
+   | Yes | Yes | Yes | "   | "        | 01.org/4.2.0+ | "             | "          | "      | "    | "      | "      |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
    | Yes | No  | No  | 2   | C3xxx    | linux/4.5+    | qat_c3xxx     | c3xxx      | 19e2   | 1    | 19e3   | 16     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
-   | Yes | No  | Yes | "   | "        | 01.org/4.2.0+ | "             | "          | "      | "    | "      | "      |
+   | Yes | Yes | Yes | "   | "        | 01.org/4.2.0+ | "             | "          | "      | "    | "      | "      |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
    | Yes | No  | No  | 2   | D15xx    | p             | qat_d15xx     | d15xx      | 6f54   | 1    | 6f55   | 16     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
-   | Yes | No  | No  | 3   | C4xxx    | p             | qat_c4xxx     | c4xxx      | 18a0   | 1    | 18a1   | 128    |
+   | Yes | No  | No  | 3   | P5xxx    | p             | qat_p5xxx     | p5xxx      | 18a0   | 1    | 18a1   | 128    |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
+
+* Note: Symmetric mixed crypto algorithms feature on Gen 2 works only with 01.org driver version 4.9.0+
 
 The first 3 columns indicate the service:
 
@@ -540,13 +653,21 @@ Another way to bind the VFs to the DPDK UIO driver is by using the
 Testing
 ~~~~~~~
 
-QAT crypto PMD can be tested by running the test application::
+QAT SYM crypto PMD can be tested by running the test application::
 
     make defconfig
     make -j
     cd ./build/app
     ./test -l1 -n1 -w <your qat bdf>
     RTE>>cryptodev_qat_autotest
+
+QAT ASYM crypto PMD can be tested by running the test application::
+
+    make defconfig
+    make -j
+    cd ./build/app
+    ./test -l1 -n1 -w <your qat bdf>
+    RTE>>cryptodev_qat_asym_autotest
 
 QAT compression PMD can be tested by running the test application::
 
